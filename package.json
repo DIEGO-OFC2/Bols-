@@ -39,6 +39,7 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@hapi/boom": "^9.1.4",
     "@noble/curves": "^2.4.0",
     "ws": "^8.22.0"
   },
