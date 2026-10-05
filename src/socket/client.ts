@@ -183,7 +183,7 @@ export interface SendMessageOptions {
   contextInfo?: Record<string, any>
 }
 
-const DEFAULT_VERSION: [number, number, number] = [2, 3000, 1043857760]
+export const DEFAULT_WA_VERSION: [number, number, number] = [2, 3000, 1043857760]
 const DEFAULT_URL = 'wss://web.whatsapp.com/ws/chat'
 const DEFAULT_ORIGIN = 'https://web.whatsapp.com'
 const MAX_QR_REFS = 5
@@ -287,7 +287,7 @@ export class WAClient {
     this.config = {
       waWebSocketUrl: config.waWebSocketUrl ?? DEFAULT_URL,
       origin: config.origin ?? DEFAULT_ORIGIN,
-      version: config.version ?? DEFAULT_VERSION,
+      version: config.version ?? DEFAULT_WA_VERSION,
       browser: config.browser ?? Browsers.macOS('Chrome'),
       connectTimeoutMs: config.connectTimeoutMs ?? 20_000,
       keepAliveIntervalMs: config.keepAliveIntervalMs ?? 30_000,

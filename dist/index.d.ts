@@ -16,7 +16,7 @@ export { encryptMedia, decryptMedia, getMediaKeys, MEDIA_PATH_MAP } from './medi
 export type { MediaType, MediaConnInfo } from './media/index.js';
 export { SignalRepository } from './signal/repository.js';
 export { buildUSyncDeviceQuery, parseUSyncDeviceResult, extractDeviceJids, deviceJid } from './usync/index.js';
-export { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, fetchLatestWaWebVersion, generateWAMessage, generateWAMessageContent, generateWAMessageFromContent, prepareWAMessageMedia, downloadContentFromMessage, downloadMediaMessage, proto, isJidUser, areJidsSameUser, getDevice, extractMessageContent, getUrlInfo, delay, WAMessageStubType, WAMessageStatus } from './compat/baileys.js';
+export { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, fetchLatestWaWebVersion, DEFAULT_WA_VERSION, generateWAMessage, generateWAMessageContent, generateWAMessageFromContent, prepareWAMessageMedia, downloadContentFromMessage, downloadMediaMessage, proto, isJidUser, areJidsSameUser, getDevice, extractMessageContent, getUrlInfo, delay, WAMessageStubType, WAMessageStatus } from './compat/baileys.js';
 export { Browsers as BaileysBrowsers, delay as baileysDelay } from './compat/baileys.js';
 export type { BaileysSocketConfig, WAMessage as BaileysWAMessage, PreparedMedia } from './compat/baileys.js';
 export { jidNormalizedUser, jidEncode, jidDecode, isJidGroup, isJidBroadcast } from './wabinary/jid.js';

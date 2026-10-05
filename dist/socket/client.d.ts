@@ -137,6 +137,7 @@ export interface SendMessageOptions {
     /** Extra fields merged into the outgoing content's `contextInfo`. */
     contextInfo?: Record<string, any>;
 }
+export declare const DEFAULT_WA_VERSION: [number, number, number];
 export declare class WAClient {
     readonly ev: Emitter<UserEvents>;
     readonly authState: AuthenticationState;

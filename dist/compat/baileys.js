@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { WAClient, DisconnectReason } from '../socket/client.js';
+import { WAClient, DisconnectReason, DEFAULT_WA_VERSION } from '../socket/client.js';
 import { initAuthCreds } from '../utils/auth-utils.js';
 import { Browsers } from '../utils/browser-utils.js';
 import { delay, unixTimestampSeconds } from '../utils/generics.js';
@@ -36,12 +36,42 @@ export const proto = {
         create: (message) => message
     }
 };
-export const DEFAULT_WA_VERSION = [2, 3000, 1043857760];
+export { DEFAULT_WA_VERSION };
+/**
+ * lightwa's bundled WhatsApp web version. Hosts should prefer
+ * `fetchLatestBaileysVersion()`/`fetchLatestWaWebVersion()` over hardcoding a
+ * tuple: the middle field is thousands and an out-of-date value makes the
+ * server drop the connection with `<failure reason="405">`.
+ */
 export const fetchLatestBaileysVersion = async () => ({
     version: DEFAULT_WA_VERSION,
     isLatest: true
 });
-export const fetchLatestWaWebVersion = fetchLatestBaileysVersion;
+/**
+ * Fetch the live web client revision from `web.whatsapp.com/sw.js` (mirrors
+ * Baileys), falling back to lightwa's bundled version when offline.
+ */
+export const fetchLatestWaWebVersion = async () => {
+    try {
+        const response = await fetch('https://web.whatsapp.com/sw.js', {
+            method: 'GET',
+            headers: {
+                'sec-fetch-site': 'none',
+                'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+            },
+            signal: AbortSignal.timeout(5000)
+        });
+        if (!response.ok)
+            throw new Error(`Failed to fetch sw.js: ${response.statusText}`);
+        const match = (await response.text()).match(/\\?"client_revision\\?":\s*(\d+)/);
+        if (!match?.[1])
+            throw new Error('Could not find client revision in sw.js');
+        return { version: [2, 3000, +match[1]], isLatest: true };
+    }
+    catch {
+        return { version: DEFAULT_WA_VERSION, isLatest: false };
+    }
+};
 export const makeWASocket = (config = {}) => {
     const socketConfig = {
         version: config.version,

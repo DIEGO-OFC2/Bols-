@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { WAClient, DisconnectReason, type SocketConfig } from '../socket/client.js';
+import { WAClient, DisconnectReason, DEFAULT_WA_VERSION, type SocketConfig } from '../socket/client.js';
 import { type AuthenticationCreds, type AuthenticationState, type SignalKeyStore } from '../utils/auth-utils.js';
 import { Browsers } from '../utils/browser-utils.js';
 import { delay } from '../utils/generics.js';
@@ -30,11 +30,21 @@ export declare const proto: {
         create: <T>(message: T) => T;
     };
 };
-export declare const DEFAULT_WA_VERSION: [number, number, number];
+export { DEFAULT_WA_VERSION };
+/**
+ * lightwa's bundled WhatsApp web version. Hosts should prefer
+ * `fetchLatestBaileysVersion()`/`fetchLatestWaWebVersion()` over hardcoding a
+ * tuple: the middle field is thousands and an out-of-date value makes the
+ * server drop the connection with `<failure reason="405">`.
+ */
 export declare const fetchLatestBaileysVersion: () => Promise<{
     version: [number, number, number];
     isLatest: boolean;
 }>;
+/**
+ * Fetch the live web client revision from `web.whatsapp.com/sw.js` (mirrors
+ * Baileys), falling back to lightwa's bundled version when offline.
+ */
 export declare const fetchLatestWaWebVersion: () => Promise<{
     version: [number, number, number];
     isLatest: boolean;

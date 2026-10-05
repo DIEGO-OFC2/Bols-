@@ -35,6 +35,7 @@ export {
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
   fetchLatestWaWebVersion,
+  DEFAULT_WA_VERSION,
   generateWAMessage,
   generateWAMessageContent,
   generateWAMessageFromContent,

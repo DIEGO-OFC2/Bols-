@@ -21,7 +21,10 @@ import {
   extractMessageContent,
   WAMessageStubType,
   WAMessageStatus,
-  makeWASocket
+  makeWASocket,
+  fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
+  DEFAULT_WA_VERSION
 } from '../src/compat/baileys.js'
 import { requireBaileys, baileysDir, skip } from './reference.js'
 
@@ -182,6 +185,14 @@ const run = async () => {
   check('getDevice', getDevice('123:7@s.whatsapp.net') === 7)
   check('extractMessageContent unwraps', extractMessageContent({ viewOnceMessageV2: { message: { conversation: 'x' } } })?.conversation === 'x')
   check('WAMessageStubType enum', WAMessageStubType.REVOKE === 1)
+
+  // Version helpers: the bundled fallback must be a modern tuple and the live
+  // fetch must return a well-formed version (or fall back cleanly offline).
+  check('DEFAULT_WA_VERSION shape', DEFAULT_WA_VERSION[0] === 2 && DEFAULT_WA_VERSION[1] === 3000 && DEFAULT_WA_VERSION[2] > 1e9, DEFAULT_WA_VERSION.join('.'))
+  const bundled = await fetchLatestBaileysVersion()
+  check('fetchLatestBaileysVersion uses bundled version', bundled.version.join('.') === DEFAULT_WA_VERSION.join('.') && bundled.isLatest === true)
+  const live = await fetchLatestWaWebVersion()
+  check('fetchLatestWaWebVersion valid tuple', live.version.length === 3 && live.version.every(n => Number.isInteger(n) && n > 0), live.version.join('.'))
 
   // makeWASocket returns a socket exposing the bot-facing surface.
   // A local server keeps the (now automatic) connection hermetic.

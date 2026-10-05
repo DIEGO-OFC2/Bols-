@@ -126,11 +126,15 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   `transportReady` gate (resolved right after `noise.finishInit`, rejected in
   `end()`). Skipping that wait is what produced `noise not initialised`.
 - The WhatsApp web version is wire-critical: the middle field is thousands, so
-  `[2, 3000, 1043857760]` (`DEFAULT_WA_VERSION`), never `[2, 300, ...]`. An
-  out-of-date version makes the server answer `<failure reason="405">` right
-  after `clientHello`, before the handshake — which surfaces as
-  `Connection Closed` / `noise not initialised`. Hosts should call
-  `fetchLatestBaileysVersion()` rather than hardcoding the tuple.
+  `[2, 3000, 1043857760]`, never `[2, 300, ...]`. An out-of-date version makes
+  the server answer `<failure reason="405">` right after `clientHello`, before
+  the handshake — which surfaces as `Connection Closed` / `noise not
+  initialised`. `DEFAULT_WA_VERSION` (exported from `socket/client.ts`, where
+  the socket default also reads it) is the single source of truth; the compat
+  layer re-exports it rather than keeping its own copy. Hosts should use
+  `fetchLatestBaileysVersion()` (lightwa's bundled version) or
+  `fetchLatestWaWebVersion()` (live `web.whatsapp.com/sw.js` revision, falling
+  back to the bundled version) instead of hardcoding the tuple.
 - `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
   emits an async error when a still-connecting socket is closed, which would
   otherwise crash the host with an unhandled `'error'` event.
