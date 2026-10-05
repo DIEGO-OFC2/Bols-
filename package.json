@@ -8,7 +8,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
     }
   },
   "files": [
@@ -21,7 +22,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "tsc -p tsconfig.json",
     "build:native": "node scripts/build-native.mjs",
+    "postinstall": "node scripts/build-native.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "example": "tsx example/demo.ts",
     "profile": "node --expose-gc --import tsx example/memory-profile.ts",

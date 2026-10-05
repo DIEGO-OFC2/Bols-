@@ -13,6 +13,15 @@ const WIRE_64BIT = 1
 const WIRE_BYTES = 2
 const WIRE_32BIT = 5
 
+const asBytes = (value: Uint8Array | { type: string; data: number[] | string }): Uint8Array => {
+  const v = value as { type?: string; data?: number[] | string }
+  if (v.type === 'Buffer') {
+    if (Array.isArray(v.data)) return Uint8Array.from(v.data)
+    if (typeof v.data === 'string') return Buffer.from(v.data, 'base64')
+  }
+  return value as Uint8Array
+}
+
 export class ByteWriter {
   private buf: Buffer
   private len = 0
@@ -102,8 +111,9 @@ export class ByteWriter {
   /** Length-delimited bytes. */
   bytes(field: number, value: Uint8Array | undefined | null): this {
     if (value === undefined || value === null) return this
-    this.tag(field, WIRE_BYTES).varint(value.length)
-    return this.raw(value)
+    const bytes = asBytes(value)
+    this.tag(field, WIRE_BYTES).varint(bytes.length)
+    return this.raw(bytes)
   }
 
   string(field: number, value: string | undefined | null): this {

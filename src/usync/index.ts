@@ -118,3 +118,71 @@ export const deviceJid = (j: FullJid): string => {
 }
 
 export { jidNormalizedUser }
+
+/** A USync protocol: the query node plus how to build/parse per-user data. */
+export interface USyncProtocol {
+  name: string
+  query: BinaryNode
+  user?: (u: USyncUserInput) => BinaryNode | null
+  parse?: (node: BinaryNode) => unknown
+}
+
+export interface USyncUserInput {
+  id?: string
+  phone?: string
+  lid?: string
+  type?: string
+}
+
+/** Build a generic `<iq xmlns="usync">` for the given protocols and users. */
+export const buildUSyncQuery = (
+  protocols: USyncProtocol[],
+  users: USyncUserInput[],
+  context: string,
+  mode: string,
+  sid: string
+): BinaryNode => ({
+  tag: 'iq',
+  attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'usync' },
+  content: [
+    {
+      tag: 'usync',
+      attrs: { context, mode, sid, last: 'true', index: '0' },
+      content: [
+        { tag: 'query', attrs: {}, content: protocols.map(p => p.query) },
+        {
+          tag: 'list',
+          attrs: {},
+          content: users.map(u => ({
+            tag: 'user',
+            attrs: u.phone ? {} : ({ jid: u.id ?? '' } as Record<string, string>),
+            content: protocols.map(p => p.user?.(u)).filter((n): n is BinaryNode => !!n)
+          }))
+        }
+      ]
+    }
+  ]
+})
+
+/** Parse a USync result into one record per user, keyed by protocol name. */
+export const parseUSyncResult = (
+  result: BinaryNode | undefined,
+  protocols: USyncProtocol[]
+): Record<string, unknown>[] => {
+  const usync = getBinaryNodeChild(result, 'usync')
+  const list = getBinaryNodeChild(usync, 'list')
+  if (!list) return []
+
+  const out: Record<string, unknown>[] = []
+  for (const user of getBinaryNodeChildren(list, 'user')) {
+    const id = user.attrs.jid
+    if (!id) continue
+    const entry: Record<string, unknown> = { id }
+    for (const p of protocols) {
+      const node = getBinaryNodeChild(user, p.name)
+      if (node) entry[p.name] = p.parse ? p.parse(node) : node
+    }
+    out.push(entry)
+  }
+  return out
+}

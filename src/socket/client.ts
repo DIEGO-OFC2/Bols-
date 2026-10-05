@@ -1,10 +1,10 @@
 import WebSocket from 'ws'
 import { randomBytes } from 'node:crypto'
-import { Curve, aesEncryptCTR, derivePairingCodeKey } from '../crypto/index.js'
+import { Curve, aesEncryptCTR, derivePairingCodeKey, generateSignalPubKey } from '../crypto/index.js'
 import type { KeyPair } from '../crypto/index.js'
 import { encodeBinaryNode } from '../wabinary/encode.js'
 import { decodeBinaryNode } from '../wabinary/decode.js'
-import { getBinaryNodeChild, getBinaryNodeChildren } from '../wabinary/generic-utils.js'
+import { getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildBuffer, getBinaryNodeChildUInt, getBinaryNodeChildString } from '../wabinary/generic-utils.js'
 import { S_WHATSAPP_NET } from '../wabinary/jid.js'
 import type { BinaryNode } from '../wabinary/types.js'
 import { encodeHandshakeMessage, decodeHandshakeMessage } from '../proto/handshake.js'
@@ -17,12 +17,16 @@ import { buildPairingQRData, getCompanionPlatformId } from '../utils/companion-u
 import { Browsers, type BrowserDescription } from '../utils/browser-utils.js'
 import { Emitter } from '../utils/emitter.js'
 import { SignalRepository } from '../signal/repository.js'
-import { encodeMessage, decodeMessage, type IMessage } from '../proto/message.js'
+import { encodeMessage, decodeMessage, normalizeMessageContent, getContentType, type IMessage, type MediaMessage } from '../proto/message.js'
 import {
   buildUSyncDeviceQuery,
   parseUSyncDeviceResult,
   extractDeviceJids,
   deviceJid,
+  buildUSyncQuery,
+  parseUSyncResult,
+  type USyncProtocol,
+  type USyncUserInput,
   type USyncDeviceResult
 } from '../usync/index.js'
 import {
@@ -32,8 +36,8 @@ import {
   type MediaConnInfo,
   type MediaType
 } from '../media/index.js'
-import { encodeBigEndian } from '../utils/generics.js'
-import { jidDecode, jidNormalizedUser, isJidGroup } from '../wabinary/jid.js'
+import { encodeBigEndian, unixTimestampSeconds } from '../utils/generics.js'
+import { jidDecode, jidNormalizedUser, isJidGroup, isPnUser, isLidUser } from '../wabinary/jid.js'
 
 export enum DisconnectReason {
   connectionClosed = 428,
@@ -45,7 +49,8 @@ export enum DisconnectReason {
   restartRequired = 515,
   multideviceMismatch = 411,
   forbidden = 403,
-  unavailableService = 503
+  unavailableService = 503,
+  connectionFailure = 428
 }
 
 export interface SocketConfig {
@@ -67,6 +72,10 @@ export interface SocketConfig {
   /** Test hook: override the certificate authority key/serial. */
   noiseCertPublicKey?: Uint8Array
   noiseCertSerial?: number
+  /** Called on every inbound message node so hosts can track presence. */
+  onMessage?: (message: IncomingMessage) => void
+  /** Optional host cache consulted before issuing a group metadata query. */
+  cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>
 }
 
 export interface Logger {
@@ -98,13 +107,80 @@ export interface ConnectionUpdate {
 type UserEvents = {
   'connection.update': (update: ConnectionUpdate) => void
   'creds.update': (creds: unknown) => void
-  'messages.upsert': (payload: { messages: IncomingMessage[] }) => void
+  'messages.upsert': (payload: { messages: IncomingMessage[]; type: string }) => void
+  'groups.update': (updates: GroupMetadata[]) => void
+  'group-participants.update': (update: GroupParticipantsUpdate) => void
 }
 
 export interface IncomingMessage {
   key: { remoteJid: string; fromMe: boolean; id: string; participant?: string }
   message: IMessage
   messageTimestamp: number
+  pushName?: string
+}
+
+export interface Contact {
+  id: string
+  name?: string
+  notify?: string
+  verifiedName?: string
+}
+
+export interface Chat {
+  id: string
+  name?: string
+  conversationTimestamp?: number
+  unreadCount?: number
+}
+
+export interface GroupParticipant {
+  id: string
+  admin?: 'admin' | 'superadmin' | null
+}
+
+export interface GroupMetadata {
+  id: string
+  subject: string
+  owner?: string
+  creation?: number
+  participants: GroupParticipant[]
+  desc?: string
+  descId?: string
+  addressingMode?: string
+  size?: number
+}
+
+export interface GroupParticipantsUpdate {
+  id: string
+  author: string
+  participants: string[]
+  action: 'add' | 'remove' | 'promote' | 'demote' | 'modify'
+}
+
+export type GroupParticipantAction = GroupParticipantsUpdate['action']
+
+export interface WAMessage {
+  key: WAMessageKey
+  message: IMessage
+  messageTimestamp: number
+  participant?: string
+  messageStubParameters: string[]
+  status: number
+}
+
+export interface WAMessageKey {
+  remoteJid: string
+  fromMe?: boolean
+  id: string
+  participant?: string
+}
+
+export interface SendMessageOptions {
+  quoted?: WAMessage
+  mentions?: string[]
+  messageId?: string
+  /** Extra fields merged into the outgoing content's `contextInfo`. */
+  contextInfo?: Record<string, any>
 }
 
 const DEFAULT_VERSION: [number, number, number] = [2, 3000, 1043857760]
@@ -112,11 +188,46 @@ const DEFAULT_URL = 'wss://web.whatsapp.com/ws/chat'
 const DEFAULT_ORIGIN = 'https://web.whatsapp.com'
 const MAX_QR_REFS = 5
 
+/** Normalize the assorted media shapes a host may pass to `waUploadToServer`. */
+const toUploadBuffer = async (input: unknown): Promise<Buffer> => {
+  if (Buffer.isBuffer(input)) return input
+  if (input instanceof Uint8Array) return Buffer.from(input)
+  if (typeof input === 'string') {
+    const { readFile } = await import('node:fs/promises')
+    return readFile(input)
+  }
+  const obj = input as {
+    type?: string
+    data?: number[] | string
+    stream?: AsyncIterable<Uint8Array>
+    url?: string
+  }
+  if (obj?.type === 'Buffer') {
+    if (Array.isArray(obj.data)) return Buffer.from(obj.data)
+    if (typeof obj.data === 'string') return Buffer.from(obj.data, 'base64')
+  }
+  if (obj?.stream) {
+    const chunks: Buffer[] = []
+    for await (const chunk of obj.stream) chunks.push(Buffer.from(chunk))
+    return Buffer.concat(chunks)
+  }
+  if (obj?.url) {
+    const res = await fetch(obj.url)
+    if (!res.ok) throw new Error(`failed to fetch media: ${res.status}`)
+    return Buffer.from(await res.arrayBuffer())
+  }
+  throw new Error('unsupported media source for waUploadToServer')
+}
+
 export class WAClient {
   readonly ev = new Emitter<UserEvents>()
   readonly authState: AuthenticationState
+  readonly chats = new Map<string, Chat>()
+  readonly contacts: Record<string, Contact> = {}
 
-  private ws: WebSocket | null = null
+  user?: { id: string; name?: string; lid?: string }
+
+  private _ws: WebSocket | null = null
   private noise: NoiseHandler | null = null
   private readonly config: Required<Pick<SocketConfig, 'waWebSocketUrl' | 'origin' | 'version' | 'browser' | 'connectTimeoutMs' | 'keepAliveIntervalMs' | 'qrTimeout'>> & {
     countryCode: string
@@ -125,6 +236,8 @@ export class WAClient {
     logger: Logger
     noiseCertPublicKey?: Uint8Array
     noiseCertSerial?: number
+    onMessage?: (message: IncomingMessage) => void
+    cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>
   }
   private ephemeralKeyPair: KeyPair | null = null
   private keepAliveTimer: NodeJS.Timeout | null = null
@@ -137,6 +250,11 @@ export class WAClient {
   private handshakeRejecter: ((err: Error) => void) | null = null
   private repo: SignalRepository | null = null
   private mediaConn: Promise<MediaConnInfo> | undefined
+  private privacySettings?: Record<string, string>
+  private groupMetaCache = new Map<string, GroupMetadata>()
+  private sentMessages = new Map<string, IMessage>()
+  private receiptWaiters = new Map<string, (node: BinaryNode) => void>()
+  private messageRetryCache = new Map<string, number>()
 
   constructor(config: SocketConfig = {}) {
     this.authState = config.auth ?? initAuthState()
@@ -153,7 +271,9 @@ export class WAClient {
       pushName: config.pushName,
       logger: config.logger ?? silentLogger,
       noiseCertPublicKey: config.noiseCertPublicKey,
-      noiseCertSerial: config.noiseCertSerial
+      noiseCertSerial: config.noiseCertSerial,
+      onMessage: config.onMessage,
+      cachedGroupMetadata: config.cachedGroupMetadata
     }
   }
 
@@ -170,7 +290,6 @@ export class WAClient {
   getUser() {
     return this.authState.creds.me
   }
-
   /** Incrementing 20-char message tag (matches the WA Web format). */
   private generateMessageTag(): string {
     this.counter = (this.counter + 1) % 0xffff
@@ -180,7 +299,7 @@ export class WAClient {
   }
 
   private async sendRaw(data: Buffer): Promise<void> {
-    const ws = this.ws
+    const ws = this._ws
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Connection Closed')
     await new Promise<void>((resolve, reject) => {
       ws.send(data, err => (err ? reject(err) : resolve()))
@@ -208,9 +327,21 @@ export class WAClient {
     return promise
   }
 
+  /** Execute a raw USync query; the device pipeline builds on this. */
+  async executeUSyncQuery(
+    protocols: USyncProtocol[],
+    users: USyncUserInput[],
+    context = 'interactive',
+    mode = 'query'
+  ): Promise<Record<string, unknown>[]> {
+    if (protocols.length === 0) throw new Error('USyncQuery must have at least one protocol')
+    const result = await this.query(buildUSyncQuery(protocols, users, context, mode, this.generateMessageTag()))
+    return parseUSyncResult(result, protocols)
+  }
+
   /** Connect and open the websocket. Handshake happens on the 'open' event. */
   connect(): void {
-    if (this.ws) return
+    if (this._ws) return
     this.closed = false
 
     this.ephemeralKeyPair = Curve.generateKeyPair()
@@ -228,7 +359,7 @@ export class WAClient {
       handshakeTimeout: this.config.connectTimeoutMs,
       timeout: this.config.connectTimeoutMs
     })
-    this.ws = ws
+    this._ws = ws
     ws.setMaxListeners(0)
 
     ws.on('open', () => {
@@ -239,11 +370,11 @@ export class WAClient {
       void this.onMessageReceived(data)
     })
     ws.on('error', err => void this.end(err as Error))
-    ws.on('close', () => void this.end(new Error('Connection Terminated')))
+    ws.on('close', (code: number) => void this.end(new Error(`Connection Terminated (${code})`), code))
   }
 
   private async awaitNextMessage(sendMsg?: Buffer): Promise<Uint8Array> {
-    const ws = this.ws
+    const ws = this._ws
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Connection Closed')
 
     return new Promise<Uint8Array>((resolve, reject) => {
@@ -282,7 +413,7 @@ export class WAClient {
       const diff = Date.now() - this.lastDateRecv
       if (diff > this.config.keepAliveIntervalMs + 5000) {
         void this.end(new Error('Connection was lost'))
-      } else if (this.ws?.readyState === WebSocket.OPEN) {
+      } else if (this._ws?.readyState === WebSocket.OPEN) {
         this.query({
           tag: 'iq',
           attrs: { id: this.generateMessageTag(), to: S_WHATSAPP_NET, type: 'get', xmlns: 'w:p' },
@@ -346,11 +477,20 @@ export class WAClient {
     if (tag === 'success') return void this.handleSuccess(node)
 
     if (tag === 'failure') {
-      return void this.end(new Error(`server failure: ${JSON.stringify(attrs)}`))
+      const statusCode = Number(attrs.reason) || DisconnectReason.badSession
+      return void this.end(new Error('Connection Failure'), statusCode)
     }
 
-    if (tag === 'stream:error' || tag === 'xmlstreamend') {
-      return void this.end(new Error('Connection Terminated by Server'))
+    if (tag === 'xmlstreamend') {
+      return void this.end(new Error('Connection Terminated by Server'), DisconnectReason.connectionClosed)
+    }
+
+    if (tag === 'stream:error') {
+      const children = Array.isArray(node.content) ? (node.content as BinaryNode[]) : []
+      const reason = children[0]?.tag
+      const mapped = reason === 'conflict' ? DisconnectReason.connectionReplaced : undefined
+      const statusCode = Number(attrs.code) || mapped || DisconnectReason.badSession
+      return void this.end(new Error(`Stream Errored (${reason ?? 'unknown'})`), statusCode)
     }
 
     // Pre-key upload is requested as an IQ set with xmlns="encrypt".
@@ -361,6 +501,22 @@ export class WAClient {
     if (tag === 'message') {
       return void this.handleIncomingMessage(node)
     }
+
+    if (tag === 'receipt') {
+      const id = attrs.id
+      if (id) {
+        const waiter = this.receiptWaiters.get(id)
+        if (waiter) waiter(node)
+      }
+      return
+    }
+
+    if (tag === 'notification') {
+      if (attrs.type === 'w:gp2') return void this.handleGroupNotification(node)
+      return
+    }
+
+    if (tag === 'ib' || tag === 'chatstate' || tag === 'presence') return
   }
 
   private handlePairDevice(stanza: BinaryNode, pairDevice: BinaryNode): void {
@@ -374,7 +530,7 @@ export class WAClient {
 
     let qrMs = this.config.qrTimeout
     const genPairQR = () => {
-      if (this.ws?.readyState !== WebSocket.OPEN) return
+      if (this._ws?.readyState !== WebSocket.OPEN) return
       const refNode = refNodes.shift()
       if (!refNode) return void this.end(new Error('QR refs attempts ended'))
       const ref = (refNode.content as Buffer).toString('utf-8')
@@ -418,8 +574,45 @@ export class WAClient {
 
   private handleSuccess(node: BinaryNode): void {
     if (this.qrTimer) clearTimeout(this.qrTimer)
-    if (node.attrs.lid && this.authState.creds.me) this.authState.creds.me.lid = node.attrs.lid
+    const me = this.authState.creds.me
+    if (node.attrs.lid && me) me.lid = node.attrs.lid
+    this.user = me ? { id: me.id, name: me.name, lid: me.lid } : undefined
     this.ev.emit('connection.update', { connection: 'open' })
+  }
+
+  private buildGroupMetadata(node: BinaryNode): GroupMetadata {
+    const attrs = node.attrs
+    const participants: GroupParticipant[] = []
+    const participantNodes = getBinaryNodeChildren(getBinaryNodeChild(node, 'participants'), 'participant')
+    for (const p of participantNodes) {
+      const id = p.attrs.jid
+      if (!id) continue
+      participants.push({ id, admin: (p.attrs.type as GroupParticipant['admin']) ?? null })
+    }
+    return {
+      id: attrs.id ?? '',
+      subject: attrs.subject ?? '',
+      owner: attrs.creator,
+      creation: attrs.creation ? +attrs.creation : undefined,
+      desc: getBinaryNodeChildString(node, 'description') ?? undefined,
+      descId: getBinaryNodeChild(getBinaryNodeChild(node, 'description'), 'body')?.attrs?.id,
+      addressingMode: attrs.addressing_mode,
+      size: participants.length,
+      participants
+    }
+  }
+
+  private handleGroupNotification(node: BinaryNode): void {
+    const attrs = node.attrs
+    if (!attrs.from || !isJidGroup(attrs.from)) return
+    const participants: string[] = []
+    const action = (attrs.type ?? 'modify') as GroupParticipantsUpdate['action']
+    for (const p of getBinaryNodeChildren(node, 'participant')) {
+      if (p.attrs.jid) participants.push(p.attrs.jid)
+    }
+    const author = (attrs.participant ?? attrs.from) as string
+    this.groupMetaCache.delete(attrs.from)
+    this.ev.emit('group-participants.update', { id: attrs.from, author, participants, action })
   }
 
   // -------------------------------------------------------------------------
@@ -495,10 +688,158 @@ export class WAClient {
   // Sending
   // -------------------------------------------------------------------------
 
-  async sendMessage(jid: string, message: IMessage): Promise<string> {
+  async sendMessage(jid: string, content: IMessage | Record<string, any>, options: SendMessageOptions = {}): Promise<WAMessage> {
     const me = this.authState.creds.me
     if (!me) throw new Error('Not authenticated')
-    const id = this.generateMessageId(me.id)
+    const message = await this.buildContent(jid, content, options)
+    if (options.contextInfo) this.applyContextInfo(message, options.contextInfo)
+    if (options.quoted) this.applyQuoted(message, options.quoted, jid)
+    if (options.mentions?.length) this.applyMentions(message, options.mentions)
+    return this.sendBuiltMessage(jid, message, options.messageId)
+  }
+
+  private async buildContent(jid: string, content: IMessage | Record<string, any>, options: SendMessageOptions): Promise<IMessage> {
+    const direct = getContentType(content as IMessage)
+    if (direct && !('text' in content) && !('react' in content) && !('delete' in content)) return content as IMessage
+
+    const c = content as Record<string, any>
+    if (c.react) return { reactionMessage: { key: c.react.key, text: c.react.text } }
+    if (c.delete) return { protocolMessage: { key: c.delete, type: 0 } }
+    if (c.edit) {
+      const original = this.sentMessages.get(c.edit.id)
+      const edited: IMessage = original
+        ? { ...(normalizeMessageContent(original) ?? original), ...this.inlineContent(c) }
+        : this.inlineContent(c)
+      return { protocolMessage: { key: c.edit, type: 14, editedMessage: edited } }
+    }
+    if (c.text !== undefined) return { extendedTextMessage: { text: c.text } }
+
+    const kind = this.mediaKind(c)
+    if (kind) {
+      const data = await this.toMediaBuffer(c[kind])
+      const prepared = await this.prepareMedia(data, this.mediaType(kind))
+      const media: MediaMessage = {
+        url: prepared.url,
+        directPath: prepared.directPath,
+        mimetype: c.mimetype ?? this.defaultMimetype(kind),
+        fileSha256: prepared.enc.fileSha256,
+        fileEncSha256: prepared.enc.fileEncSha256,
+        fileLength: prepared.enc.fileLength,
+        mediaKey: prepared.enc.mediaKey,
+        mediaKeyTimestamp: unixTimestampSeconds(),
+        caption: c.caption,
+        fileName: c.fileName,
+        seconds: c.seconds,
+        ptt: kind === 'audio' ? (c.ptt ?? false) : undefined,
+        gifPlayback: kind === 'video' ? c.gifPlayback : undefined,
+        viewOnce: c.viewOnce,
+        height: c.height,
+        width: c.width,
+        jpegThumbnail: c.jpegThumbnail,
+        contextInfo: c.contextInfo
+      }
+      const message: IMessage =
+        kind === 'image'
+          ? { imageMessage: media }
+          : kind === 'video'
+            ? { videoMessage: media }
+            : kind === 'audio'
+              ? { audioMessage: media }
+              : kind === 'sticker'
+                ? { stickerMessage: media }
+                : { documentMessage: media }
+      if (c.viewOnce && (kind === 'image' || kind === 'video')) return { viewOnceMessageV2: { message } }
+      return message
+    }
+
+    if (direct) return content as IMessage
+    throw new Error(`unsupported message content: ${Object.keys(c).join(',')}`)
+  }
+
+  private inlineContent(c: Record<string, any>): IMessage {
+    if (c.text !== undefined) return { extendedTextMessage: { text: c.text } }
+    throw new Error('edit requires text')
+  }
+
+  private mediaKind(c: Record<string, any>): 'image' | 'video' | 'audio' | 'document' | 'sticker' | undefined {
+    for (const kind of ['image', 'video', 'audio', 'document', 'sticker'] as const) {
+      if (c[kind] !== undefined) return kind
+    }
+    return undefined
+  }
+
+  private mediaType(kind: string): MediaType {
+    return (kind === 'sticker' ? 'image' : kind) as MediaType
+  }
+
+  private defaultMimetype(kind: string): string {
+    if (kind === 'image') return 'image/jpeg'
+    if (kind === 'video') return 'video/mp4'
+    if (kind === 'audio') return 'audio/ogg; codecs=opus'
+    if (kind === 'sticker') return 'image/webp'
+    return 'application/octet-stream'
+  }
+
+  private async toMediaBuffer(source: unknown): Promise<Uint8Array> {
+    if (Buffer.isBuffer(source) || source instanceof Uint8Array) return source
+    if (typeof source === 'string') {
+      if (/^https?:\/\//.test(source)) {
+        const res = await fetch(source)
+        if (!res.ok) throw new Error(`failed to fetch media: ${res.status}`)
+        return Buffer.from(await res.arrayBuffer())
+      }
+      return Buffer.from(await (await import('node:fs/promises')).readFile(source))
+    }
+    const obj = source as { url?: string; stream?: AsyncIterable<Buffer> }
+    if (obj?.url) return this.toMediaBuffer(obj.url)
+    if (obj?.stream) {
+      const chunks: Buffer[] = []
+      for await (const chunk of obj.stream) chunks.push(Buffer.from(chunk))
+      return Buffer.concat(chunks)
+    }
+    throw new Error('unsupported media source')
+  }
+
+  private applyContextInfo(message: IMessage, contextInfo: Record<string, any>): void {
+    const normalized = normalizeMessageContent(message) ?? message
+    const key = getContentType(normalized)
+    if (!key) return
+    const content = (normalized as Record<string, any>)[key]
+    if (!content || typeof content !== 'object') return
+    content.contextInfo = { ...(content.contextInfo ?? {}), ...contextInfo }
+  }
+
+  private applyQuoted(message: IMessage, quoted: WAMessage, jid: string): void {
+    const normalized = normalizeMessageContent(message) ?? message
+    const key = getContentType(normalized)
+    if (!key) return
+    const content = (normalized as Record<string, any>)[key]
+    if (!content || typeof content !== 'object') return
+    const quotedContent = normalizeMessageContent(quoted.message) ?? quoted.message
+    const participant = quoted.key.fromMe
+      ? this.authState.creds.me?.id
+      : quoted.key.participant ?? quoted.key.remoteJid
+    content.contextInfo = {
+      ...(content.contextInfo ?? {}),
+      stanzaId: quoted.key.id,
+      participant: jidNormalizedUser(participant),
+      quotedMessage: quotedContent,
+      ...(jid !== quoted.key.remoteJid ? { remoteJid: quoted.key.remoteJid } : {})
+    }
+  }
+
+  private applyMentions(message: IMessage, mentions: string[]): void {
+    const normalized = normalizeMessageContent(message) ?? message
+    const key = getContentType(normalized)
+    if (!key) return
+    const content = (normalized as Record<string, any>)[key]
+    if (!content || typeof content !== 'object') return
+    content.contextInfo = { ...(content.contextInfo ?? {}), mentionedJid: mentions }
+  }
+
+  private async sendBuiltMessage(jid: string, message: IMessage, messageId?: string): Promise<WAMessage> {
+    const me = this.authState.creds.me!
+    const id = messageId ?? this.generateMessageId(me.id)
     const repo = this.getRepository()
     const isGroupLike = isJidGroup(jid)
 
@@ -508,7 +849,7 @@ export class WAClient {
 
     const recipients = await this.resolveRecipients(jid, isGroupLike)
     for (const r of recipients) {
-      const { nodes, included } = await this.encryptForRecipients(repo, r, encrypted, shouldIncludeDeviceIdentity)
+      const { nodes } = await this.encryptForRecipients(repo, r, encrypted, shouldIncludeDeviceIdentity)
       content.push(...nodes)
     }
     if (!content.length) throw new Error('No recipients to send to')
@@ -524,7 +865,18 @@ export class WAClient {
       content
     }
     await this.sendNode(stanza)
-    return id
+    this.sentMessages.set(id, message)
+    if (this.sentMessages.size > 512) {
+      const oldest = this.sentMessages.keys().next().value
+      if (oldest !== undefined) this.sentMessages.delete(oldest)
+    }
+    return {
+      key: { remoteJid: jid, fromMe: true, id, participant: isGroupLike ? me.id : undefined },
+      message,
+      messageTimestamp: unixTimestampSeconds(),
+      messageStubParameters: [],
+      status: 1
+    }
   }
 
   /** Encrypt the message for one participant (its own devices, or the group). */
@@ -540,6 +892,7 @@ export class WAClient {
     if (recipient.isGroup) {
       const group = recipient.group!
       const senderDevice = jidDecode(me.id)?.device ?? 0
+      await this.assertSessions(recipient.devices)
       // SKDM once, then the group message.
       if (!(await repo.hasSenderKey(group, jidDecode(me.id)!.user!, senderDevice))) {
         const skdm = await repo.createSenderKeyDistribution(group, jidDecode(me.id)!.user!, senderDevice)
@@ -557,13 +910,16 @@ export class WAClient {
       return { nodes, included: false }
     }
 
+    const ownDevices = (await this.getOwnDevices()).filter(d => d !== me.id)
+    await this.assertSessions([...recipient.devices, ...ownDevices])
+
     for (const device of recipient.devices) {
       const res = await repo.encryptMessage(device, encrypted)
       if (res.type === 'pkmsg') pkmsgFlag.value = true
       nodes.push({ tag: 'to', attrs: { jid: device }, content: [{ tag: 'enc', attrs: { v: '2', type: res.type }, content: res.ciphertext }] })
     }
     // Also deliver to our own other devices.
-    for (const device of (await this.getOwnDevices()).filter(d => d !== me.id)) {
+    for (const device of ownDevices) {
       const dsMessage = encodeMessage({ deviceSentMessage: { destinationJid: recipient.jid, message: decodeMessage(encrypted) } })
       const res = await repo.encryptMessage(device, dsMessage)
       nodes.push({ tag: 'to', attrs: { jid: device }, content: [{ tag: 'enc', attrs: { v: '2', type: res.type }, content: res.ciphertext }] })
@@ -605,9 +961,94 @@ export class WAClient {
     const query = buildUSyncDeviceQuery(jids, this.generateMessageTag())
     const result = await this.query(query)
     const parsed = parseUSyncDeviceResult(result)
+    const repo = this.getRepository()
+    const mappings = parsed
+      .filter(u => u.lid)
+      .map(u => ({ lid: u.lid!, pn: jidNormalizedUser(u.id) }))
+    if (mappings.length) await repo.lidMapping.storeLIDPNMappings(mappings)
     const full = extractDeviceJids(parsed, me.id, me.lid ?? '', false)
     if (forceQuery) return full.map(deviceJid)
     return full.map(deviceJid)
+  }
+
+  /**
+   * Fetch pre-key bundles for devices with no session yet and inject them, so
+   * the subsequent encrypt produces a `pkmsg`. Sessions are only keyed on the
+   * wire id (LID when a mapping exists), matching the server's addressing.
+   */
+  private async assertSessions(devices: string[]): Promise<void> {
+    const repo = this.getRepository()
+    const missing: string[] = []
+    for (const device of devices) {
+      if (!(await repo.hasSession(device))) missing.push(device)
+    }
+    if (!missing.length) return
+
+    const wireJids = await this.toWireJids(missing)
+    if (!wireJids.length) return
+
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
+      content: [{ tag: 'key', attrs: {}, content: wireJids.map(jid => ({ tag: 'user', attrs: { jid } })) }]
+    })
+
+    for (const user of getBinaryNodeChildren(getBinaryNodeChild(result, 'list'), 'user')) {
+      const jid = user.attrs.jid
+      if (!jid) continue
+      const identity = getBinaryNodeChildBuffer(user, 'identity')
+      const signedPreKey = this.extractPreKey(user, 'skey')
+      const preKey = this.extractPreKey(user, 'key')
+      if (!identity || !signedPreKey) continue
+      await repo.injectE2ESession(jid, {
+        registrationId: getBinaryNodeChildUInt(user, 'registration', 4) ?? 0,
+        identityKey: generateSignalPubKey(identity),
+        signedPreKey: {
+          ...signedPreKey,
+          publicKey: generateSignalPubKey(signedPreKey.publicKey),
+          signature: signedPreKey.signature
+        },
+        preKey: preKey && { keyId: preKey.keyId, publicKey: generateSignalPubKey(preKey.publicKey) }
+      })
+    }
+  }
+
+  private extractPreKey(
+    node: BinaryNode,
+    tag: string
+  ): { keyId: number; publicKey: Uint8Array; signature: Uint8Array } | undefined {
+    const key = getBinaryNodeChild(node, tag)
+    if (!key) return undefined
+    const publicKey = getBinaryNodeChildBuffer(key, 'value')
+    if (!publicKey) return undefined
+    return {
+      keyId: getBinaryNodeChildUInt(key, 'id', 3) ?? 0,
+      publicKey,
+      signature: getBinaryNodeChildBuffer(key, 'signature') ?? new Uint8Array(0)
+    }
+  }
+
+  /** Map device JIDs to the LID form the server uses for the session fetch. */
+  private async toWireJids(devices: string[]): Promise<string[]> {
+    const repo = this.getRepository()
+    const out: string[] = []
+    for (const device of devices) {
+      if (isLidUser(device)) {
+        out.push(device)
+      } else if (isPnUser(device)) {
+        const lid = await repo.lidMapping.getLIDForPN(jidNormalizedUser(device))
+        if (lid) {
+          const decoded = jidDecode(lid)!
+          const dev = jidDecode(device)?.device ?? 0
+          out.push(`${decoded.user}:${dev}@lid`)
+        } else {
+          out.push(device)
+        }
+      } else {
+        out.push(device)
+      }
+    }
+    return out
   }
 
   private async queryGroupMetadata(jid: string): Promise<string[]> {
@@ -638,11 +1079,27 @@ export class WAClient {
     return { url, directPath, enc }
   }
 
+  /**
+   * Baileys-compatible media upload entry point. Accepts the several shapes a
+   * host may hand back — a Buffer, a `{ type: 'Buffer', data }` BufferJSON
+   * object, a `{ stream }` async iterable, or a file path — and pushes the
+   * (already encrypted) bytes to the media host.
+   */
+  waUploadToServer = async (
+    encrypted: unknown,
+    opts: { mediaType: MediaType; fileEncSha256B64: string }
+  ): Promise<{ url: string; mediaUrl: string; directPath: string }> => {
+    const buf = await toUploadBuffer(encrypted)
+    const fileEncSha256 = Buffer.from(opts.fileEncSha256B64, 'base64')
+    const result = await uploadMedia(buf, fileEncSha256, opts.mediaType, force => this.refreshMediaConn(force))
+    return { url: result.url, mediaUrl: result.url, directPath: result.directPath }
+  }
+
   async sendImage(
     jid: string,
     image: Uint8Array,
     opts: { caption?: string; mimetype?: string; fileName?: string } = {}
-  ): Promise<string> {
+  ): Promise<WAMessage> {
     const { url, directPath, enc } = await this.prepareMedia(image, 'image')
     const message: IMessage = {
       imageMessage: {
@@ -665,7 +1122,7 @@ export class WAClient {
     data: Uint8Array,
     type: MediaType,
     opts: { caption?: string; mimetype?: string; fileName?: string; seconds?: number; ptt?: boolean; height?: number; width?: number } = {}
-  ): Promise<string> {
+  ): Promise<WAMessage> {
     const { url, directPath, enc } = await this.prepareMedia(data, type)
     const base = {
       url,
@@ -737,13 +1194,50 @@ export class WAClient {
       if (!decryptResult) return
 
       const message = decodeMessage(decryptResult.plaintext)
-      this.ev.emit('messages.upsert', {
-        messages: [{ key: { remoteJid: from, fromMe: false, id: attrs.id!, participant }, message, messageTimestamp: attrs.t ? +attrs.t : Math.floor(Date.now() / 1000) }]
-      })
+      const messageTimestamp = attrs.t ? +attrs.t : Math.floor(Date.now() / 1000)
+      const incoming: IncomingMessage = {
+        key: { remoteJid: from, fromMe: false, id: attrs.id!, participant },
+        message,
+        messageTimestamp
+      }
+      const chat = this.chats.get(from) ?? { id: from }
+      chat.conversationTimestamp = messageTimestamp
+      this.chats.set(from, chat)
+      this.sentMessages.set(attrs.id!, message)
+      if (this.sentMessages.size > 512) {
+        const oldest = this.sentMessages.keys().next().value
+        if (oldest !== undefined) this.sentMessages.delete(oldest)
+      }
+      this.config.onMessage?.(incoming)
+      this.ev.emit('messages.upsert', { messages: [incoming], type: 'notify' })
       void this.sendMessageAck(stanza, from, attrs.id!, participant)
     } catch (err) {
       this.config.logger.warn({ err }, 'failed to handle incoming message')
+      this.retryRequest(stanza).catch(() => {})
     }
+  }
+
+  private async retryRequest(stanza: BinaryNode): Promise<void> {
+    const id = stanza.attrs.id
+    if (!id || !stanza.attrs.from) return
+    const attempts = (this.messageRetryCache.get(id) ?? 0) + 1
+    if (attempts > 3) {
+      this.messageRetryCache.delete(id)
+      return
+    }
+    this.messageRetryCache.set(id, attempts)
+    const enc = getBinaryNodeChild(stanza, 'enc')
+    const participant = stanza.attrs.participant ?? stanza.attrs.from
+    await this.sendNode({
+      tag: 'receipt',
+      attrs: {
+        id,
+        to: stanza.attrs.from,
+        type: 'retry',
+        ...(participant ? { participant } : {})
+      },
+      content: enc ? [enc] : undefined
+    }).catch(() => {})
   }
 
   private async decryptMessageNode(
@@ -849,7 +1343,7 @@ export class WAClient {
     return Buffer.concat([salt, iv, ciphered])
   }
 
-  private async end(error?: Error): Promise<void> {
+  private async end(error?: Error, statusCode?: number): Promise<void> {
     if (this.closed) return
     this.closed = true
 
@@ -858,7 +1352,7 @@ export class WAClient {
     this.keepAliveTimer = null
     this.qrTimer = null
 
-    const ws = this.ws
+    const ws = this._ws
     if (ws) {
       ws.removeAllListeners()
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -867,9 +1361,12 @@ export class WAClient {
         } catch {}
       }
     }
-    this.ws = null
+    this._ws = null
     this.noise = null
-    const err = error ?? new Error('Connection Closed')
+    let err = error ?? new Error('Connection Closed')
+    if (statusCode !== undefined && statusCode !== 1000 && statusCode !== 1005) {
+      ;(err as Error & { output: { statusCode: number } }).output = { statusCode }
+    }
     // Reject in-flight queries instead of merely dropping them: a dropped
     // resolver both hangs the awaiter and keeps its closure alive until GC.
     for (const [, pending] of this.pendingResolvers) {
@@ -884,7 +1381,327 @@ export class WAClient {
       reject(err)
     }
 
-    this.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error, date: new Date() } })
+    this.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: err, date: new Date() } })
+  }
+
+  get signalRepository(): SignalRepository {
+    return this.getRepository()
+  }
+
+  get ws(): WebSocket | null {
+    return this._ws
+  }
+
+  async groupMetadata(jid: string): Promise<GroupMetadata> {
+    const cached = this.groupMetaCache.get(jid)
+    if (cached) return cached
+    if (this.config.cachedGroupMetadata) {
+      const hostCached = await this.config.cachedGroupMetadata(jid).catch(() => undefined)
+      if (hostCached) {
+        this.groupMetaCache.set(jid, hostCached)
+        return hostCached
+      }
+    }
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { type: 'get', xmlns: 'w:g2', to: jid },
+      content: [{ tag: 'query', attrs: { request: 'interactive' } }]
+    })
+    const meta = this.buildGroupMetadata(getBinaryNodeChild(result, 'group') ?? { tag: 'group', attrs: {} })
+    this.groupMetaCache.set(jid, meta)
+    if (this.groupMetaCache.size > 256) {
+      const oldest = this.groupMetaCache.keys().next().value
+      if (oldest !== undefined) this.groupMetaCache.delete(oldest)
+    }
+    return meta
+  }
+
+  async groupFetchAllParticipating(): Promise<Record<string, GroupMetadata>> {
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { to: '@g.us', xmlns: 'w:g2', type: 'get' },
+      content: [
+        {
+          tag: 'participating',
+          attrs: {},
+          content: [
+            { tag: 'participants', attrs: {} },
+            { tag: 'description', attrs: {} }
+          ]
+        }
+      ]
+    })
+    const data: Record<string, GroupMetadata> = {}
+    const groupsNode = getBinaryNodeChild(result, 'groups')
+    if (groupsNode) {
+      for (const groupNode of getBinaryNodeChildren(groupsNode, 'group')) {
+        const meta = this.buildGroupMetadata(groupNode)
+        data[meta.id] = meta
+        this.groupMetaCache.set(meta.id, meta)
+      }
+    }
+    this.ev.emit('groups.update', Object.values(data))
+    return data
+  }
+
+  async groupParticipantsUpdate(
+    jid: string,
+    participants: string[],
+    action: GroupParticipantAction
+  ): Promise<{ status: string; jid: string }[]> {
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { type: 'set', xmlns: 'w:g2', to: jid },
+      content: [
+        {
+          tag: action,
+          attrs: {},
+          content: participants.map(p => ({ tag: 'participant', attrs: { jid: p } }))
+        }
+      ]
+    })
+    this.groupMetaCache.delete(jid)
+    const node = getBinaryNodeChild(result, action)
+    return getBinaryNodeChildren(node, 'participant').map(p => ({
+      status: p.attrs.error ?? '200',
+      jid: p.attrs.jid ?? ''
+    }))
+  }
+
+  async groupInviteCode(jid: string): Promise<string | undefined> {
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { type: 'get', xmlns: 'w:g2', to: jid },
+      content: [{ tag: 'invite', attrs: {} }]
+    })
+    return getBinaryNodeChild(result, 'invite')?.attrs.code
+  }
+
+  async profilePictureUrl(jid: string, type: 'preview' | 'image' = 'preview'): Promise<string | undefined> {
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { target: jidNormalizedUser(jid), to: S_WHATSAPP_NET, type: 'get', xmlns: 'w:profile:picture' },
+      content: [{ tag: 'picture', attrs: { type, query: 'url' } }]
+    })
+    return getBinaryNodeChild(result, 'picture')?.attrs.url
+  }
+
+  async sendPresenceUpdate(type: 'available' | 'unavailable' | 'composing' | 'recording' | 'paused', to?: string): Promise<void> {
+    if (!this.authState.creds.me) return
+    await this.sendNode({
+      tag: 'presence',
+      attrs: { to: to ?? S_WHATSAPP_NET, type },
+      content: undefined
+    })
+  }
+
+  async sendReceipt(jid: string, participant: string | undefined, ids: string[], type: 'read' | 'read-self' | 'played' | 'delivered'): Promise<void> {
+    await this.sendNode({
+      tag: 'receipt',
+      attrs: { to: jid, ...(participant ? { participant } : {}), type, id: ids[0]! },
+      content: ids.slice(1).map(id => ({ tag: 'list', attrs: { id } }))
+    })
+  }
+
+  /** Bulk send receipts, grouped by chat + participant, skipping our own messages. */
+  async sendReceipts(keys: WAMessageKey[], type: 'read' | 'read-self' | 'played' | 'delivered'): Promise<void> {
+    const groups = new Map<string, { jid: string; participant?: string; messageIds: string[] }>()
+    for (const { remoteJid, id, participant, fromMe } of keys) {
+      if (fromMe || !remoteJid) continue
+      const uqKey = `${remoteJid}:${participant || ''}`
+      let g = groups.get(uqKey)
+      if (!g) groups.set(uqKey, (g = { jid: remoteJid, participant, messageIds: [] }))
+      g.messageIds.push(id)
+    }
+    for (const g of groups.values()) await this.sendReceipt(g.jid, g.participant, g.messageIds, type)
+  }
+
+  /** Bulk read messages, honouring the account's read-receipt privacy setting. */
+  async readMessages(keys: WAMessageKey[]): Promise<void> {
+    const privacy = await this.fetchPrivacySettings()
+    const readType = privacy.readreceipts === 'all' ? 'read' : 'read-self'
+    await this.sendReceipts(keys, readType)
+  }
+
+  async presenceSubscribe(toJid: string): Promise<void> {
+    const normalized = jidNormalizedUser(toJid)
+    const isUserJid = isPnUser(normalized) || isLidUser(normalized)
+    await this.sendNode({
+      tag: 'presence',
+      attrs: { to: toJid, id: this.generateMessageTag(), type: isUserJid ? 'subscribe' : 'available' }
+    })
+  }
+
+  async fetchPrivacySettings(force = false): Promise<Record<string, string>> {
+    if (!this.privacySettings || force) {
+      const result = await this.query({
+        tag: 'iq',
+        attrs: { xmlns: 'privacy', to: S_WHATSAPP_NET, type: 'get' },
+        content: [{ tag: 'privacy', attrs: {} }]
+      })
+      const privacy = getBinaryNodeChild(result, 'privacy')
+      const dict: Record<string, string> = {}
+      for (const category of getBinaryNodeChildren(privacy, 'category')) {
+        const name = category.attrs.name
+        if (typeof name === 'string') dict[name] = category.attrs.value || category.attrs.config_value || ''
+      }
+      this.privacySettings = dict
+    }
+    return this.privacySettings
+  }
+
+  async fetchStatus(...jids: string[]): Promise<Record<string, unknown>[]> {
+    return this.executeUSyncQuery(
+      [{ name: 'status', query: { tag: 'status', attrs: {} }, user: () => null, parse: node => ({ status: node.content?.toString() ?? null, setAt: new Date(+(node.attrs.t || 0) * 1000) }) }],
+      jids.map(id => ({ id }))
+    )
+  }
+
+  async onWhatsApp(...phoneNumbers: string[]): Promise<{ jid: string; exists: boolean }[]> {
+    const users: USyncUserInput[] = []
+    for (const jid of phoneNumbers) {
+      if (isLidUser(jid)) continue
+      users.push({ phone: `+${jid.replace('+', '').split('@')[0]?.split(':')[0]}` })
+    }
+    if (users.length === 0) return []
+    const list = await this.executeUSyncQuery(
+      [{ name: 'contact', query: { tag: 'contact', attrs: {} }, user: u => ({ tag: 'contact', attrs: {}, content: u.phone }), parse: node => node.attrs.type === 'in' }],
+      users
+    )
+    return list.map(r => ({ jid: r.id as string, exists: !!r.contact }))
+  }
+
+  async updateProfileStatus(status: string): Promise<void> {
+    await this.query({
+      tag: 'iq',
+      attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'status' },
+      content: [{ tag: 'status', attrs: {}, content: Buffer.from(status, 'utf-8') }]
+    })
+  }
+
+  async updateProfileName(name: string): Promise<void> {
+    if (!this.authState.creds.me) throw new Error('Not logged in')
+    await this.query({
+      tag: 'iq',
+      attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'w:profile:pushname' },
+      content: [{ tag: 'pushname', attrs: {}, content: Buffer.from(name, 'utf-8') }]
+    })
+    this.authState.creds.me.name = name
+    this.ev.emit('creds.update', { me: this.authState.creds.me })
+  }
+
+  async getBusinessProfile(jid: string): Promise<Record<string, unknown> | undefined> {
+    const result = await this.query({
+      tag: 'iq',
+      attrs: { to: S_WHATSAPP_NET, xmlns: 'w:biz', type: 'get' },
+      content: [
+        { tag: 'business_profile', attrs: { v: '244' }, content: [{ tag: 'profile', attrs: { jid } }] }
+      ]
+    })
+    const profiles = getBinaryNodeChild(getBinaryNodeChild(result, 'business_profile'), 'profile')
+    if (!profiles) return
+    const businessHours = getBinaryNodeChild(profiles, 'business_hours')
+    const website = getBinaryNodeChild(profiles, 'website')?.content?.toString()
+    return {
+      wid: profiles.attrs.jid,
+      address: getBinaryNodeChild(profiles, 'address')?.content?.toString(),
+      description: getBinaryNodeChild(profiles, 'description')?.content?.toString() || '',
+      website: website ? [website] : [],
+      email: getBinaryNodeChild(profiles, 'email')?.content?.toString(),
+      category: getBinaryNodeChild(getBinaryNodeChild(profiles, 'categories'), 'category')?.content?.toString(),
+      business_hours: {
+        timezone: businessHours?.attrs.timezone,
+        business_config: getBinaryNodeChildren(businessHours, 'business_hours_config').map(n => n.attrs)
+      }
+    }
+  }
+
+  /** Log out: tell the server to drop this companion, then close locally. */
+  async logout(msg?: string): Promise<void> {
+    const me = this.authState.creds.me
+    if (me) {
+      await this.sendNode({
+        tag: 'iq',
+        attrs: { to: S_WHATSAPP_NET, type: 'set', id: this.generateMessageTag(), xmlns: 'md' },
+        content: [{ tag: 'remove-companion-device', attrs: { jid: me.id, reason: 'user_initiated' } }]
+      })
+    }
+    await this.end(new Error(msg || 'Intentional Logout'), DisconnectReason.loggedOut)
+  }
+
+  async relayMessage(jid: string, message: IMessage, options: SendMessageOptions = {}): Promise<string> {
+    const built = await this.sendBuiltMessage(jid, message, options.messageId)
+    return built.key.id
+  }
+
+  /** Send a reaction (or clear one with an empty text) to a message. */
+  async sendReact(jid: string, emoji: string, key: WAMessage['key']): Promise<WAMessage> {
+    return this.sendMessage(jid, { react: { text: emoji, key } })
+  }
+
+  /**
+   * Send an album: one `albumMessage` envelope followed by each media child,
+   * associated to the envelope via `messageContextInfo.messageAssociation`.
+   * V3 implements this on top of the socket, but lightwa provides it natively
+   * so the socket is a strict superset of what consumers expect.
+   */
+  async sendAlbum(
+    jid: string,
+    medias: { type: 'image' | 'video'; data: unknown }[],
+    options: { caption?: string; quoted?: WAMessage } = {}
+  ): Promise<WAMessage> {
+    if (!Array.isArray(medias) || medias.length < 1) throw new Error('sendAlbum requires at least 1 media')
+
+    const contextInfo = options.quoted
+      ? {
+          remoteJid: options.quoted.key.remoteJid,
+          fromMe: options.quoted.key.fromMe,
+          stanzaId: options.quoted.key.id,
+          participant: options.quoted.key.participant ?? options.quoted.key.remoteJid,
+          quotedMessage: options.quoted.message
+        }
+      : undefined
+
+    const album = await this.sendMessage(jid, {
+      messageContextInfo: {},
+      albumMessage: {
+        expectedImageCount: medias.filter(m => m.type === 'image').length,
+        expectedVideoCount: medias.filter(m => m.type === 'video').length,
+        ...(contextInfo ? { contextInfo } : {})
+      }
+    })
+
+    for (let i = 0; i < medias.length; i++) {
+      const { type, data } = medias[i]!
+      await this.sendMessage(
+        jid,
+        { [type]: data, ...(i === 0 && options.caption ? { caption: options.caption } : {}) },
+        {
+          contextInfo: {
+            messageAssociation: { associationType: 1, parentMessageKey: album.key }
+          }
+        }
+      )
+      if (i < medias.length - 1) await new Promise(r => setTimeout(r, 500))
+    }
+
+    return album
+  }
+
+  async downloadMediaMessage(message: WAMessage | IMessage, type?: string): Promise<Buffer> {
+    const content = (message as WAMessage).message ?? (message as IMessage)
+    const normalized = normalizeMessageContent(content) ?? content ?? {}
+    const kind = getContentType(normalized)
+    if (!kind || !kind.endsWith('Message')) throw new Error('no downloadable media in message')
+    const media = (normalized as Record<string, any>)[kind] as MediaMessage
+    const host = 'mmg.whatsapp.net'
+    const url = media.directPath ? `https://${host}${media.directPath}` : media.url
+    const res = await fetch(url)
+    if (!res.ok) throw new Error(`media download failed: ${res.status}`)
+    const encrypted = Buffer.from(await res.arrayBuffer())
+    const mediaType = kind.replace(/Message$/, '') as MediaType
+    void type
+    return decryptMedia(encrypted, media.mediaKey, mediaType)
   }
 
   async close(): Promise<void> {
