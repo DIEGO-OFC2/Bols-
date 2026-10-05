@@ -33,7 +33,7 @@ export declare const md5: (buffer: Uint8Array) => Buffer;
 /** HKDF-SHA256 (extract then expand), matching the WebCrypto reference semantics. */
 export declare const hkdf: (inputKeyMaterial: Uint8Array, expandedLength: number, info?: {
     salt?: Uint8Array;
-    info?: string;
+    info?: string | Uint8Array;
 }) => Buffer;
 /** PBKDF2-SHA256 with 131072 iterations, used to derive the pairing-code key. */
 export declare const derivePairingCodeKey: (pairingCode: string, salt: Uint8Array) => Promise<Buffer>;

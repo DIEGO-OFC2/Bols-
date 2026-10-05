@@ -226,7 +226,11 @@ export const SINGLE_BYTE_TOKENS: string[] = [
 ]
 
 export const TOKEN_MAP: Record<string, { index: number; dict?: number }> = (() => {
-  const map: Record<string, { index: number; dict?: number }> = {}
+  // Prototype-less so token lookups for strings such as "toString" or
+  // "constructor" return undefined instead of an inherited Object.prototype
+  // member, which would otherwise encode a bogus token byte and corrupt the
+  // frame.
+  const map: Record<string, { index: number; dict?: number }> = Object.create(null)
   for (let i = 0; i < SINGLE_BYTE_TOKENS.length; i++) {
     map[SINGLE_BYTE_TOKENS[i]!] = { index: i }
   }

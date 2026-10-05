@@ -210,9 +210,16 @@ export const sha256 = (buffer) => nativeCrypto ? nativeCrypto.sha256(buffer) : c
 export const asBuffer = (u) => Buffer.isBuffer(u) ? u : Buffer.from(u.buffer, u.byteOffset, u.byteLength);
 export const md5 = (buffer) => createHash('md5').update(buffer).digest();
 /** HKDF-SHA256 (extract then expand), matching the WebCrypto reference semantics. */
-export const hkdf = (inputKeyMaterial, expandedLength, info = {}) => nativeCrypto
-    ? nativeCrypto.hkdf(inputKeyMaterial, info.salt ?? EMPTY_BYTES, info.info ? Buffer.from(info.info) : EMPTY_BYTES, expandedLength)
-    : Buffer.from(nobleHkdf(sha256Noble, inputKeyMaterial, info.salt ?? EMPTY_BYTES, info.info ? Buffer.from(info.info) : EMPTY_BYTES, expandedLength));
+export const hkdf = (inputKeyMaterial, expandedLength, info = {}) => {
+    const infoBytes = info.info === undefined
+        ? EMPTY_BYTES
+        : typeof info.info === 'string'
+            ? Buffer.from(info.info)
+            : info.info;
+    return nativeCrypto
+        ? nativeCrypto.hkdf(inputKeyMaterial, info.salt ?? EMPTY_BYTES, infoBytes, expandedLength)
+        : Buffer.from(nobleHkdf(sha256Noble, inputKeyMaterial, info.salt ?? EMPTY_BYTES, infoBytes, expandedLength));
+};
 /** PBKDF2-SHA256 with 131072 iterations, used to derive the pairing-code key. */
 export const derivePairingCodeKey = async (pairingCode, salt) => {
     const { pbkdf2Sync } = await import('node:crypto');

@@ -202,10 +202,12 @@ export class WAClient {
         });
         ws.on('message', (data) => {
             this.lastDateRecv = Date.now();
-            void this.onMessageReceived(data);
+            // A malformed frame must not surface as an unhandled rejection (which
+            // would crash the host process); end the connection instead.
+            this.onMessageReceived(data).catch(err => void this.end(err));
         });
-        ws.on('error', err => void this.end(err));
-        ws.on('close', (code) => void this.end(new Error(`Connection Terminated (${code})`), code));
+        ws.on('error', err => void this.end(err).catch(() => { }));
+        ws.on('close', (code) => void this.end(new Error(`Connection Terminated (${code})`), code).catch(() => { }));
     }
     async awaitNextMessage(sendMsg) {
         const ws = this._ws;
@@ -269,7 +271,7 @@ export class WAClient {
                 resolve(frame);
                 return;
             }
-            this.handleNode(decodeBinaryNode(Buffer.from(frame)));
+            this.handleNode(decodeBinaryNode(Buffer.isBuffer(frame) ? frame : Buffer.from(frame)));
             return;
         }
         this.handleNode(frame);
@@ -1013,6 +1015,11 @@ export class WAClient {
             return;
         }
         this.messageRetryCache.set(id, attempts);
+        if (this.messageRetryCache.size > 1024) {
+            const oldest = this.messageRetryCache.keys().next().value;
+            if (oldest !== undefined)
+                this.messageRetryCache.delete(oldest);
+        }
         const enc = getBinaryNodeChild(stanza, 'enc');
         const participant = stanza.attrs.participant ?? stanza.attrs.from;
         await this.sendNode({

@@ -274,24 +274,26 @@ export const md5 = (buffer: Uint8Array): Buffer => createHash('md5').update(buff
 export const hkdf = (
   inputKeyMaterial: Uint8Array,
   expandedLength: number,
-  info: { salt?: Uint8Array; info?: string } = {}
-): Buffer =>
-  nativeCrypto
-    ? nativeCrypto.hkdf(
-        inputKeyMaterial,
-        info.salt ?? EMPTY_BYTES,
-        info.info ? Buffer.from(info.info) : EMPTY_BYTES,
-        expandedLength
-      )
+  info: { salt?: Uint8Array; info?: string | Uint8Array } = {}
+): Buffer => {
+  const infoBytes =
+    info.info === undefined
+      ? EMPTY_BYTES
+      : typeof info.info === 'string'
+        ? Buffer.from(info.info)
+        : info.info
+  return nativeCrypto
+    ? nativeCrypto.hkdf(inputKeyMaterial, info.salt ?? EMPTY_BYTES, infoBytes, expandedLength)
     : Buffer.from(
         nobleHkdf(
           sha256Noble,
           inputKeyMaterial,
           info.salt ?? EMPTY_BYTES,
-          info.info ? Buffer.from(info.info) : EMPTY_BYTES,
+          infoBytes,
           expandedLength
         )
       )
+}
 
 /** PBKDF2-SHA256 with 131072 iterations, used to derive the pairing-code key. */
 export const derivePairingCodeKey = async (pairingCode: string, salt: Uint8Array): Promise<Buffer> => {

@@ -34,6 +34,12 @@ const HKDF_NAME: Record<MediaType, string> = {
   gif: 'Video'
 }
 
+// The info string is fixed per media type; precompute its UTF-8 bytes so the
+// hot path does not allocate a Buffer on every key derivation.
+const HKDF_INFO: Record<MediaType, Buffer> = Object.fromEntries(
+  (Object.keys(HKDF_NAME) as MediaType[]).map(t => [t, Buffer.from(`WhatsApp ${HKDF_NAME[t]} Keys`)])
+) as Record<MediaType, Buffer>
+
 export interface MediaKeys {
   iv: Buffer
   cipherKey: Buffer
@@ -44,7 +50,7 @@ export interface MediaKeys {
 export const getMediaKeys = (mediaKey: Uint8Array, mediaType: MediaType): MediaKeys => {
   // HKDF-SHA256 with an all-zero salt, expanded to 112 bytes, is exactly
   // libsignal's deriveSecrets with 4 chunks.
-  const expanded = hkdf(mediaKey, 112, { salt: ZERO32, info: `WhatsApp ${HKDF_NAME[mediaType]} Keys` })
+  const expanded = hkdf(mediaKey, 112, { salt: ZERO32, info: HKDF_INFO[mediaType] })
   return {
     iv: expanded.subarray(0, 16),
     cipherKey: expanded.subarray(16, 48),

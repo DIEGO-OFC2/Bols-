@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 
 const suites = [
   'test/proto-test.ts',
+  'test/encoding-test.ts',
   'test/connection-test.ts',
   'test/crypto-test.ts',
   'test/handshake-test.ts',

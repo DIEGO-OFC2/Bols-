@@ -224,7 +224,11 @@ export const SINGLE_BYTE_TOKENS = [
     '03', 'screen_height'
 ];
 export const TOKEN_MAP = (() => {
-    const map = {};
+    // Prototype-less so token lookups for strings such as "toString" or
+    // "constructor" return undefined instead of an inherited Object.prototype
+    // member, which would otherwise encode a bogus token byte and corrupt the
+    // frame.
+    const map = Object.create(null);
     for (let i = 0; i < SINGLE_BYTE_TOKENS.length; i++) {
         map[SINGLE_BYTE_TOKENS[i]] = { index: i };
     }
