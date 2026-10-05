@@ -1,5 +1,4 @@
 node_modules/
-dist/
 *.log
 .agent_tmp/
 # Platform-specific native build output; built from native/hkdf.c on install.
