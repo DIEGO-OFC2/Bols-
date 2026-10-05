@@ -1,0 +1,52 @@
+{
+  "name": "lightwa",
+  "version": "0.1.0",
+  "description": "A memory-frugal, allocation-conscious WhatsApp Web socket library (QR + pairing code).",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*",
+    "native/*.c",
+    "scripts/build-native.mjs"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "build:native": "node scripts/build-native.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "example": "tsx example/demo.ts",
+    "profile": "node --expose-gc --import tsx example/memory-profile.ts",
+    "bench": "node --expose-gc bench/compare.mjs",
+    "test": "tsx test/run-tests.ts"
+  },
+  "keywords": [
+    "whatsapp",
+    "whatsapp-web",
+    "websocket",
+    "noise-protocol",
+    "baileys"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@noble/curves": "^2.4.0",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.2",
+    "baileys": "^7.0.0-rc14",
+    "curve25519-js": "^0.0.4",
+    "libsignal": "^6.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
