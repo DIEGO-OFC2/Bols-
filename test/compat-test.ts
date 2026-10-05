@@ -5,6 +5,7 @@
  */
 import { createServer } from 'node:http'
 import { Readable } from 'node:stream'
+import { WebSocketServer } from 'ws'
 import { encodeMessage, decodeMessage } from '../src/proto/message.js'
 import { encryptMedia, decryptMedia } from '../src/media/index.js'
 import {
@@ -183,7 +184,17 @@ const run = async () => {
   check('WAMessageStubType enum', WAMessageStubType.REVOKE === 1)
 
   // makeWASocket returns a socket exposing the bot-facing surface.
-  const sock = makeWASocket({ auth: undefined as any, printQRInTerminal: false })
+  // A local server keeps the (now automatic) connection hermetic.
+  const wss = new WebSocketServer({ port: 0 })
+  await new Promise<void>(res => wss.on('listening', () => res()))
+  const sockPort = (wss.address() as any).port
+  const sock = makeWASocket({
+    auth: undefined as any,
+    printQRInTerminal: false,
+    waWebSocketUrl: `ws://127.0.0.1:${sockPort}`,
+    logger: { level: 'silent', trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {} }
+  })
+  check('makeWASocket auto-connects', !!sock.ws)
   check('socket has ev', !!sock.ev && typeof sock.ev.on === 'function')
   check('socket sendMessage fn', typeof (sock as any).sendMessage === 'function')
   check('socket sendPresenceUpdate fn', typeof (sock as any).sendPresenceUpdate === 'function')
@@ -194,6 +205,9 @@ const run = async () => {
   for (const m of ['logout', 'onWhatsApp', 'presenceSubscribe', 'readMessages', 'sendReceipts', 'updateProfileName', 'updateProfileStatus', 'fetchPrivacySettings', 'fetchStatus', 'getBusinessProfile', 'executeUSyncQuery', 'sendAlbum', 'sendReact']) {
     check(`socket ${m} fn`, typeof (sock as any)[m] === 'function')
   }
+  await sock.close()
+  wss.close()
+  await new Promise(r => setTimeout(r, 50))
 
   console.log(`\n${pass}/${total} baileys compat checks passed`)
   if (pass !== total) process.exitCode = 1

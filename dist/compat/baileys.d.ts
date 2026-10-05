@@ -53,6 +53,7 @@ export interface BaileysSocketConfig {
     defaultQueryTimeoutMs?: number;
     syncFullHistory?: boolean;
     markOnlineOnConnect?: boolean;
+    waWebSocketUrl?: string;
     [key: string]: unknown;
 }
 export declare const makeWASocket: (config?: BaileysSocketConfig) => WAClient;

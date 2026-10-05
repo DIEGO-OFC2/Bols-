@@ -77,6 +77,19 @@ const toUploadBuffer = async (input) => {
     }
     throw new Error('unsupported media source for waUploadToServer');
 };
+const deferred = () => {
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => {
+        resolve = res;
+        reject = rej;
+    });
+    // Mark the rejection as handled so a gate nobody awaits (e.g. the QR flow)
+    // cannot crash the host process with an unhandled rejection. Awaiters still
+    // observe the rejection through `promise`.
+    void promise.catch(() => { });
+    return { promise, resolve, reject };
+};
 export class WAClient {
     ev = new Emitter();
     authState;
@@ -85,6 +98,12 @@ export class WAClient {
     user;
     _ws = null;
     noise = null;
+    /**
+     * Resolves once the Noise transport keys are installed, i.e. `sendNode` can
+     * emit a decryptable frame. Requests that need the transport (pairing code)
+     * await this instead of racing the handshake.
+     */
+    transportReady = null;
     config;
     ephemeralKeyPair = null;
     keepAliveTimer = null;
@@ -189,6 +208,8 @@ export class WAClient {
             certPublicKey: this.config.noiseCertPublicKey,
             certSerial: this.config.noiseCertSerial
         });
+        // Reset the transport gate for this connection attempt.
+        this.transportReady = deferred();
         this.ev.emit('connection.update', { connection: 'connecting', qr: undefined });
         const ws = new WebSocket(this.config.waWebSocketUrl, {
             origin: this.config.origin,
@@ -236,6 +257,7 @@ export class WAClient {
         const clientFinish = encodeHandshakeMessage({ clientFinish: { static: keyEnc, payload: payloadEnc } });
         await this.sendRaw(noise.encodeFrame(clientFinish));
         await noise.finishInit(frame => this.routeIncoming(frame));
+        this.transportReady?.resolve();
         this.startKeepAlive();
     }
     startKeepAlive() {
@@ -1090,6 +1112,10 @@ export class WAClient {
         if (customPairingCode && customPairingCode.length !== 8) {
             throw new Error('Custom pairing code must be exactly 8 chars');
         }
+        // The request is a transport node, so it can only go out once the Noise
+        // handshake has installed the encryption keys. Hosts commonly call this
+        // right after `makeWASocket`, before the websocket is even open.
+        await this.awaitTransport();
         this.authState.creds.pairingCode = pairingCode;
         this.authState.creds.me = { id: `${phoneNumber}@s.whatsapp.net`, name: '~' };
         this.ev.emit('creds.update', this.authState.creds);
@@ -1117,6 +1143,16 @@ export class WAClient {
         });
         return pairingCode;
     }
+    /**
+     * Wait until the Noise transport is usable. Rejects if the connection drops
+     * (or was never started) before the handshake completes, so callers fail
+     * fast instead of hanging on a socket that will never open.
+     */
+    async awaitTransport() {
+        if (!this.transportReady)
+            throw new Error('Connection Closed');
+        await this.transportReady.promise;
+    }
     async generatePairingKey(pairingCode) {
         const salt = randomBytes(32);
         const iv = randomBytes(16);
@@ -1137,6 +1173,10 @@ export class WAClient {
         const ws = this._ws;
         if (ws) {
             ws.removeAllListeners();
+            // Closing a still-connecting socket makes ws emit an async 'error'
+            // ("closed before the connection was established"); the no-op listener
+            // keeps that from crashing the host process.
+            ws.on('error', () => { });
             if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
                 try {
                     ws.close();
@@ -1158,6 +1198,10 @@ export class WAClient {
             pending.reject(err);
         }
         this.pendingResolvers.clear();
+        // Fail any waiter on the Noise transport (e.g. an in-flight pairing-code
+        // request) instead of leaving it pending on a connection that is gone.
+        this.transportReady?.reject(err);
+        this.transportReady = null;
         if (this.handshakeRejecter) {
             const reject = this.handshakeRejecter;
             this.handshakeResolver = null;

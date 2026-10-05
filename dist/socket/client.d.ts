@@ -149,6 +149,12 @@ export declare class WAClient {
     };
     private _ws;
     private noise;
+    /**
+     * Resolves once the Noise transport keys are installed, i.e. `sendNode` can
+     * emit a decryptable frame. Requests that need the transport (pairing code)
+     * await this instead of racing the handshake.
+     */
+    private transportReady;
     private readonly config;
     private ephemeralKeyPair;
     private keepAliveTimer;
@@ -275,6 +281,12 @@ export declare class WAClient {
     private buildDeviceIdentityNode;
     /** Ask the server for a pairing code for a phone number (linked-device flow). */
     requestPairingCode(phoneNumber: string, customPairingCode?: string): Promise<string>;
+    /**
+     * Wait until the Noise transport is usable. Rejects if the connection drops
+     * (or was never started) before the handshake completes, so callers fail
+     * fast instead of hanging on a socket that will never open.
+     */
+    private awaitTransport;
     private generatePairingKey;
     private end;
     get signalRepository(): SignalRepository;

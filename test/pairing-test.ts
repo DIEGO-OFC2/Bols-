@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { WebSocketServer } from 'ws'
 import {
   Curve,
   aesDecryptGCM,
@@ -7,7 +8,10 @@ import {
   hkdf
 } from '../src/crypto/index.js'
 import { buildCompanionFinish } from '../src/utils/validate-connection.js'
-import { initAuthCreds } from '../src/utils/auth-utils.js'
+import { initAuthCreds, initAuthState } from '../src/utils/auth-utils.js'
+import { getBinaryNodeChild } from '../src/wabinary/generic-utils.js'
+import { WAClient } from '../src/socket/client.js'
+import { runServer } from './mock-server.js'
 
 let total = 0
 let pass = 0
@@ -97,6 +101,81 @@ const run = async () => {
   ).toString('base64')
 
   check('adv secret matches server derivation', advSecretKey === expectedAdv)
+
+  await runE2E()
+}
+
+/**
+ * Drive the linked-device pairing-code flow end to end: the client requests a
+ * code before the socket is open, the mock server answers with a
+ * `link_code_companion_reg`, and the client completes `companion_finish`.
+ * Reproduces the "noise not initialised" regression when the handshake is not
+ * awaited before the request goes out.
+ */
+const runE2E = async () => {
+  const ca = Curve.generateKeyPair()
+  const ctx: any = { ca }
+  const wss = new WebSocketServer({ port: 0 })
+  await new Promise<void>(res => wss.on('listening', () => res()))
+  const port = (wss.address() as any).port
+
+  // The primary device's pairing ephemeral key; the client recovers its public
+  // half from the wrapped node using the pairing code.
+  const primaryEphemeral = Curve.generateKeyPair()
+  const primaryIdentity = Curve.generateKeyPair()
+  let helloJid: string | undefined
+  let finishNode: any
+
+  ctx.onNode = async (node: any, send: (node: any) => void) => {
+    if (node.tag !== 'iq') return
+    const reg = getBinaryNodeChild(node, 'link_code_companion_reg')
+    if (!reg) return
+    if (reg.attrs.stage === 'companion_hello') {
+      helloJid = reg.attrs.jid
+      const code = client.authState.creds.pairingCode!
+      const salt = randomBytes(32)
+      const iv = randomBytes(16)
+      const wrappingKey = await derivePairingCodeKey(code, salt)
+      const wrapped = Buffer.concat([salt, iv, aesEncryptCTR(primaryEphemeral.public, wrappingKey, iv)])
+      send({
+        tag: 'link_code_companion_reg',
+        attrs: {},
+        content: [
+          { tag: 'link_code_pairing_ref', attrs: {}, content: Buffer.from('REF-E2E') },
+          { tag: 'primary_identity_pub', attrs: {}, content: primaryIdentity.public },
+          { tag: 'link_code_pairing_wrapped_primary_ephemeral_pub', attrs: {}, content: wrapped }
+        ]
+      })
+    } else if (reg.attrs.stage === 'companion_finish') {
+      finishNode = reg
+    }
+  }
+  runServer(wss, ctx)
+
+  const auth = initAuthState()
+  const client = new WAClient({
+    waWebSocketUrl: `ws://127.0.0.1:${port}`,
+    origin: 'https://web.whatsapp.com',
+    auth,
+    logger: { level: 'silent', trace: () => {}, debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    noiseCertPublicKey: ca.public,
+    noiseCertSerial: 0
+  })
+  client.connect()
+
+  const code = await client.requestPairingCode('15551234567')
+  check('pairing code is 8 crockford chars', /^[0-9A-HJKMNP-TV-Z]{8}$/.test(code), code)
+
+  // The server answers asynchronously; wait for companion_finish to land.
+  for (let i = 0; i < 100 && !finishNode; i++) await new Promise(r => setTimeout(r, 20))
+  check('server received companion_finish', !!finishNode)
+  check('hello carried the phone jid', helloJid === '15551234567@s.whatsapp.net', String(helloJid))
+  check('companion_finish jid matches', finishNode?.attrs.jid === '15551234567@s.whatsapp.net')
+  check('creds marked registered', auth.creds.registered === true)
+
+  await client.close()
+  wss.close()
+  await new Promise(r => setTimeout(r, 50))
 
   console.log(`\n${pass}/${total} pairing checks passed`)
   if (pass !== total) process.exitCode = 1

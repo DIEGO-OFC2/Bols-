@@ -120,6 +120,14 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   When broadening the public surface, keep this file and `src/index.ts` in sync.
 - `SocketConfig.browser` accepts the Baileys tuple form `[os, browser, version]`;
   the compat layer passes it through unchanged.
+- `makeWASocket` opens the websocket itself (like Baileys); hosts never call
+  `WAClient.connect()`. `connect()` builds the `NoiseHandler` but the transport
+  keys only exist after the handshake, so `requestPairingCode` awaits the
+  `transportReady` gate (resolved right after `noise.finishInit`, rejected in
+  `end()`). Skipping that wait is what produced `noise not initialised`.
+- `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
+  emits an async error when a still-connecting socket is closed, which would
+  otherwise crash the host with an unhandled `'error'` event.
 - Generic USync lives in `src/usync/index.ts`: `buildUSyncQuery`/`parseUSyncResult`
   plus `WAClient.executeUSyncQuery(protocols, users)`. `onWhatsApp` (contact
   protocol) and `fetchStatus` (status protocol) are built on it; the send path

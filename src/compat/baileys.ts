@@ -59,6 +59,7 @@ export interface BaileysSocketConfig {
   defaultQueryTimeoutMs?: number
   syncFullHistory?: boolean
   markOnlineOnConnect?: boolean
+  waWebSocketUrl?: string
   [key: string]: unknown
 }
 
@@ -67,12 +68,16 @@ export const makeWASocket = (config: BaileysSocketConfig = {}): WAClient => {
     version: config.version,
     browser: config.browser,
     logger: config.logger,
+    waWebSocketUrl: config.waWebSocketUrl,
     connectTimeoutMs: config.connectTimeoutMs ?? config.defaultQueryTimeoutMs,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
     syncFullHistory: config.syncFullHistory
   }
   if (config.auth) socketConfig.auth = { creds: config.auth.creds, keys: config.auth.keys }
   const sock = new WAClient(socketConfig)
+  // Baileys opens the websocket as part of `makeWASocket`; hosts (the V3 bot)
+  // rely on this and never call `connect()` themselves.
+  sock.connect()
   if (config.printQRInTerminal) {
     sock.ev.on('connection.update', async ({ qr }) => {
       if (!qr) return
