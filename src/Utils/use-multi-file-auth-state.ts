@@ -9,18 +9,32 @@ import { BufferJSON } from './generics'
 // We need to lock files due to the fact that we are using async functions to read and write files
 // https://github.com/WhiskeySockets/Baileys/issues/794
 // https://github.com/nodejs/node/issues/26338
-// Use a Map to store mutexes for each file path
-const fileLocks = new Map<string, Mutex>()
+// Use a Map to store mutexes for each file path. Entries are ref-counted and
+// dropped once no reader/writer holds or waits on the lock, so a long-lived
+// session (or many sub-bots sharing this module) doesn't accumulate a mutex for
+// every file path it has ever touched.
+const fileLocks = new Map<string, { mutex: Mutex; refCount: number }>()
 
-// Get or create a mutex for a specific file path
-const getFileLock = (path: string): Mutex => {
-	let mutex = fileLocks.get(path)
-	if (!mutex) {
-		mutex = new Mutex()
-		fileLocks.set(path, mutex)
+const acquireFileLock = async (path: string): Promise<() => void> => {
+	let entry = fileLocks.get(path)
+	if (!entry) {
+		entry = { mutex: new Mutex(), refCount: 0 }
+		fileLocks.set(path, entry)
 	}
 
-	return mutex
+	entry.refCount++
+	const release = await entry.mutex.acquire()
+
+	return () => {
+		release()
+		const current = fileLocks.get(path)
+		if (current === entry) {
+			current.refCount--
+			if (current.refCount === 0) {
+				fileLocks.delete(path)
+			}
+		}
+	}
 }
 
 /**
@@ -36,30 +50,26 @@ export const useMultiFileAuthState = async (
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const writeData = async (data: any, file: string) => {
 		const filePath = join(folder, fixFileName(file)!)
-		const mutex = getFileLock(filePath)
+		const release = await acquireFileLock(filePath)
 
-		return mutex.acquire().then(async release => {
-			try {
-				await writeFile(filePath, JSON.stringify(data, BufferJSON.replacer))
-			} finally {
-				release()
-			}
-		})
+		try {
+			await writeFile(filePath, JSON.stringify(data, BufferJSON.replacer))
+		} finally {
+			release()
+		}
 	}
 
 	const readData = async (file: string) => {
 		try {
 			const filePath = join(folder, fixFileName(file)!)
-			const mutex = getFileLock(filePath)
+			const release = await acquireFileLock(filePath)
 
-			return await mutex.acquire().then(async release => {
-				try {
-					const data = await readFile(filePath, { encoding: 'utf-8' })
-					return JSON.parse(data, BufferJSON.reviver)
-				} finally {
-					release()
-				}
-			})
+			try {
+				const data = await readFile(filePath, { encoding: 'utf-8' })
+				return JSON.parse(data, BufferJSON.reviver)
+			} finally {
+				release()
+			}
 		} catch (error) {
 			return null
 		}
@@ -68,16 +78,14 @@ export const useMultiFileAuthState = async (
 	const removeData = async (file: string) => {
 		try {
 			const filePath = join(folder, fixFileName(file)!)
-			const mutex = getFileLock(filePath)
+			const release = await acquireFileLock(filePath)
 
-			return mutex.acquire().then(async release => {
-				try {
-					await unlink(filePath)
-				} catch {
-				} finally {
-					release()
-				}
-			})
+			try {
+				await unlink(filePath)
+			} catch {
+			} finally {
+				release()
+			}
 		} catch {}
 	}
 
