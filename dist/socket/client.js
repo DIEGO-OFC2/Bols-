@@ -46,6 +46,10 @@ export const DEFAULT_WA_VERSION = [2, 3000, 1043857760];
 const DEFAULT_URL = 'wss://web.whatsapp.com/ws/chat';
 const DEFAULT_ORIGIN = 'https://web.whatsapp.com';
 const MAX_QR_REFS = 5;
+// Mirrors Baileys: one-time pre-keys are replenished in batches, with a larger
+// initial batch when the server holds none for us yet.
+const MIN_PREKEY_COUNT = 5;
+const INITIAL_PREKEY_COUNT = 812;
 /** Normalize the assorted media shapes a host may pass to `waUploadToServer`. */
 const toUploadBuffer = async (input) => {
     if (Buffer.isBuffer(input))
@@ -121,6 +125,8 @@ export class WAClient {
     sentMessages = new Map();
     receiptWaiters = new Map();
     messageRetryCache = new Map();
+    /** De-dupes concurrent pre-key uploads (server can request while one is in flight). */
+    preKeyUpload = null;
     constructor(config = {}) {
         this.authState = config.auth ?? initAuthState();
         this.config = {
@@ -130,6 +136,7 @@ export class WAClient {
             browser: config.browser ?? Browsers.macOS('Chrome'),
             connectTimeoutMs: config.connectTimeoutMs ?? 20_000,
             keepAliveIntervalMs: config.keepAliveIntervalMs ?? 30_000,
+            markOnlineOnConnect: config.markOnlineOnConnect ?? true,
             qrTimeout: config.qrTimeout ?? 60_000,
             countryCode: config.countryCode ?? 'US',
             syncFullHistory: config.syncFullHistory ?? true,
@@ -336,9 +343,9 @@ export class WAClient {
             const statusCode = Number(attrs.code) || mapped || DisconnectReason.badSession;
             return void this.end(new Error(`Stream Errored (${reason ?? 'unknown'})`), statusCode);
         }
-        // Pre-key upload is requested as an IQ set with xmlns="encrypt".
+        // Pre-key upload can be requested as an IQ set with xmlns="encrypt".
         if (tag === 'iq' && attrs.type === 'set' && attrs.xmlns === 'encrypt') {
-            return void this.handlePreKeyUpload(node);
+            return void this.handlePreKeyUpload();
         }
         if (tag === 'message') {
             return void this.handleIncomingMessage(node);
@@ -360,6 +367,12 @@ export class WAClient {
             // companion never sends `companion_finish` and no `pair-success` arrives.
             if (attrs.type === 'link_code_companion_reg')
                 return void this.handleCompanionRegNotification(node);
+            // Server asks for more one-time pre-keys when its supply runs low. This
+            // is the *real* trigger (not an encrypt IQ): ignoring it starves the
+            // server of pre-keys and peers can no longer open sessions to us, so the
+            // socket connects and saves but silently receives nothing.
+            if (attrs.type === 'encrypt')
+                return void this.handleEncryptNotification(node);
             return;
         }
         // Server-driven "information" stanzas. Most are informational, but
@@ -487,6 +500,17 @@ export class WAClient {
             attrs: { to: S_WHATSAPP_NET, xmlns: 'passive', type: 'set' },
             content: [{ tag: 'active', attrs: {} }]
         }).catch(() => { });
+        // A companion session starts with no one-time pre-keys on the server, so
+        // nobody can open a Signal session to send us messages until we upload
+        // some. Baileys does this on every `success`; skipping it is why the bot
+        // connects, saves the session, and then silently receives nothing.
+        void this.uploadPreKeysIfRequired().catch(() => { });
+        // Mirror Baileys: mark the companion online right after login. Without it
+        // the linked device stays "inactive" on the phone and some servers hold
+        // back the message stream.
+        if (this.config.markOnlineOnConnect) {
+            void this.sendPresenceUpdate('available').catch(() => { });
+        }
         this.ev.emit('connection.update', { connection: 'open' });
     }
     buildGroupMetadata(node) {
@@ -538,42 +562,97 @@ export class WAClient {
         }
         return this.repo;
     }
-    async handlePreKeyUpload(node) {
+    async handlePreKeyUpload() {
+        await this.uploadPreKeys().catch(err => void this.end(err));
+    }
+    /**
+     * Server notification (`<notification type="encrypt"><count value=..>) telling
+     * us its one-time pre-key supply is low. Upload more, then ack the stanza.
+     */
+    async handleEncryptNotification(node) {
+        const from = node.attrs.from;
         try {
-            const creds = this.authState.creds;
-            const keys = await this.generateAndStorePreKeys(25);
-            const content = [
-                { tag: 'registration', attrs: {}, content: encodeBigEndian(creds.registrationId) },
-                { tag: 'type', attrs: {}, content: Buffer.from([5]) },
-                { tag: 'identity', attrs: {}, content: creds.signedIdentityKey.public },
-                {
-                    tag: 'list',
-                    attrs: {},
-                    content: keys.map(({ id, keyPair }) => ({
-                        tag: 'key',
-                        attrs: {},
-                        content: [
-                            { tag: 'id', attrs: {}, content: encodeBigEndian(id, 3) },
-                            { tag: 'value', attrs: {}, content: keyPair.public }
-                        ]
-                    }))
-                },
-                {
-                    tag: 'skey',
-                    attrs: {},
-                    content: [
-                        { tag: 'id', attrs: {}, content: encodeBigEndian(creds.signedPreKey.keyId, 3) },
-                        { tag: 'value', attrs: {}, content: creds.signedPreKey.keyPair.public },
-                        { tag: 'signature', attrs: {}, content: creds.signedPreKey.signature }
-                    ]
-                }
-            ];
-            await this.sendNode({ tag: 'iq', attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'encrypt' }, content });
-            this.ev.emit('creds.update', creds);
+            if (from === S_WHATSAPP_NET) {
+                const count = +(getBinaryNodeChild(node, 'count')?.attrs.value ?? '0');
+                if (count < MIN_PREKEY_COUNT)
+                    await this.uploadPreKeys(MIN_PREKEY_COUNT);
+            }
         }
         catch (err) {
-            void this.end(err);
+            this.config.logger.warn({ err }, 'failed to handle encrypt notification');
         }
+        finally {
+            if (from && node.attrs.id) {
+                await this.sendNode({
+                    tag: 'ack',
+                    attrs: { id: node.attrs.id, to: from, class: 'notification', type: 'encrypt' },
+                    content: undefined
+                }).catch(() => { });
+            }
+        }
+    }
+    /** Ask the server how many one-time pre-keys it still holds for us. */
+    async getAvailablePreKeysOnServer() {
+        const result = await this.query({
+            tag: 'iq',
+            attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'encrypt' },
+            content: [{ tag: 'count', attrs: {} }]
+        });
+        return +(getBinaryNodeChild(result, 'count')?.attrs.value ?? '0');
+    }
+    /** Replenish pre-keys when the server's supply is low or our current key is missing. */
+    async uploadPreKeysIfRequired() {
+        const preKeyCount = await this.getAvailablePreKeysOnServer();
+        const count = preKeyCount === 0 ? INITIAL_PREKEY_COUNT : MIN_PREKEY_COUNT;
+        const currentPreKeyId = this.authState.creds.nextPreKeyId - 1;
+        let currentPreKeyExists = false;
+        if (currentPreKeyId > 0) {
+            const stored = await this.authState.keys.get('pre-key', [currentPreKeyId.toString()]);
+            currentPreKeyExists = Boolean(stored[currentPreKeyId.toString()]);
+        }
+        const missingCurrentPreKey = !currentPreKeyExists && currentPreKeyId > 0;
+        if (preKeyCount <= count || missingCurrentPreKey)
+            await this.uploadPreKeys(count);
+    }
+    async uploadPreKeys(count = MIN_PREKEY_COUNT) {
+        if (this.preKeyUpload)
+            return this.preKeyUpload;
+        this.preKeyUpload = this.performPreKeyUpload(count).finally(() => {
+            this.preKeyUpload = null;
+        });
+        return this.preKeyUpload;
+    }
+    async performPreKeyUpload(count) {
+        const creds = this.authState.creds;
+        const keys = await this.generateAndStorePreKeys(count);
+        const content = [
+            { tag: 'registration', attrs: {}, content: encodeBigEndian(creds.registrationId) },
+            { tag: 'type', attrs: {}, content: Buffer.from([5]) },
+            { tag: 'identity', attrs: {}, content: creds.signedIdentityKey.public },
+            {
+                tag: 'list',
+                attrs: {},
+                content: keys.map(({ id, keyPair }) => ({
+                    tag: 'key',
+                    attrs: {},
+                    content: [
+                        { tag: 'id', attrs: {}, content: encodeBigEndian(id, 3) },
+                        { tag: 'value', attrs: {}, content: keyPair.public }
+                    ]
+                }))
+            },
+            {
+                tag: 'skey',
+                attrs: {},
+                content: [
+                    { tag: 'id', attrs: {}, content: encodeBigEndian(creds.signedPreKey.keyId, 3) },
+                    { tag: 'value', attrs: {}, content: creds.signedPreKey.keyPair.public },
+                    { tag: 'signature', attrs: {}, content: creds.signedPreKey.signature }
+                ]
+            }
+        ];
+        await this.sendNode({ tag: 'iq', attrs: { to: S_WHATSAPP_NET, type: 'set', xmlns: 'encrypt' }, content });
+        this.ev.emit('creds.update', creds);
     }
     async generateAndStorePreKeys(count) {
         const creds = this.authState.creds;
@@ -1388,12 +1467,31 @@ export class WAClient {
         return getBinaryNodeChild(result, 'picture')?.attrs.url;
     }
     async sendPresenceUpdate(type, to) {
-        if (!this.authState.creds.me)
+        const me = this.authState.creds.me;
+        if (!me)
             return;
+        // `available`/`unavailable` are global presence and carry our push name;
+        // `composing`/`recording`/`paused` are per-chat chatstate stanzas.
+        if (type === 'available' || type === 'unavailable') {
+            // Baileys refuses global presence without a push name (the stanza carries
+            // it); hosts would otherwise think they are online when they are not.
+            if (!me.name)
+                return;
+            this.ev.emit('connection.update', { isOnline: type === 'available' });
+            await this.sendNode({
+                tag: 'presence',
+                attrs: { name: me.name.replace(/@/g, ''), type },
+                content: undefined
+            });
+            return;
+        }
+        if (!to)
+            return;
+        const server = jidDecode(to)?.server;
         await this.sendNode({
-            tag: 'presence',
-            attrs: { to: to ?? S_WHATSAPP_NET, type },
-            content: undefined
+            tag: 'chatstate',
+            attrs: { from: server === 'lid' && me.lid ? me.lid : me.id, to },
+            content: [{ tag: type === 'recording' ? 'composing' : type, attrs: type === 'recording' ? { media: 'audio' } : {} }]
         });
     }
     async sendReceipt(jid, participant, ids, type) {

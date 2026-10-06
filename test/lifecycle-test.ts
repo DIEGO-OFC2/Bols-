@@ -39,6 +39,10 @@ const main = async () => {
       if (node.tag === 'iq' && node.attrs.xmlns === 'passive') {
         send({ tag: 'iq', attrs: { type: 'result', id: node.attrs.id } })
       }
+      if (node.tag === 'iq' && node.attrs.type === 'get' && node.attrs.xmlns === 'encrypt') {
+        // No pre-keys on the server yet -> client must upload the initial batch.
+        send({ tag: 'iq', attrs: { type: 'result', id: node.attrs.id }, content: [{ tag: 'count', attrs: { value: '0' } }] })
+      }
       if (node.tag === 'ib') {
         const child = Array.isArray(node.content) ? (node.content[0] as BinaryNode) : undefined
         if (child?.tag === 'offline_batch') {
@@ -60,8 +64,10 @@ const main = async () => {
   })
 
   let pendingNotifs = false
+  let isOnline = false
   client.ev.on('connection.update', (u: any) => {
     if (u.receivedPendingNotifications) pendingNotifs = true
+    if (u.isOnline) isOnline = true
   })
 
   const open = waitFor(client, u => u.connection === 'open')
@@ -92,6 +98,47 @@ const main = async () => {
   // The <offline> marker (sent in response above) flips receivedPendingNotifications.
   for (let i = 0; i < 100 && !pendingNotifs; i++) await new Promise(r => setTimeout(r, 10))
   check('receivedPendingNotifications emitted', pendingNotifs)
+
+  // After login the client must top up the server's one-time pre-keys. Without
+  // them no peer can open a Signal session to us, so the socket connects and
+  // saves but never receives anything.
+  for (let i = 0; i < 100 && !received.some(n => n.tag === 'iq' && n.attrs.type === 'set' && n.attrs.xmlns === 'encrypt'); i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const upload = received.find(n => n.tag === 'iq' && n.attrs.type === 'set' && n.attrs.xmlns === 'encrypt')
+  check('pre-keys uploaded after success', !!upload)
+  const uploadChildren = Array.isArray(upload?.content) ? (upload!.content as BinaryNode[]) : []
+  check('upload carries registration', uploadChildren.some(c => c.tag === 'registration'))
+  check('upload carries identity', uploadChildren.some(c => c.tag === 'identity'))
+  check('upload carries signed pre-key', uploadChildren.some(c => c.tag === 'skey'))
+  const keyList = uploadChildren.find(c => c.tag === 'list')
+  const uploadedKeys = Array.isArray(keyList?.content) ? (keyList!.content as BinaryNode[]) : []
+  check('initial batch is 812 one-time pre-keys', uploadedKeys.length === 812, `got=${uploadedKeys.length}`)
+
+  // A low-supply notification must also trigger an upload and be acked.
+  const beforeNotif = received.filter(n => n.tag === 'iq' && n.attrs.type === 'set' && n.attrs.xmlns === 'encrypt').length
+  serverSend!({
+    tag: 'notification',
+    attrs: { from: '@s.whatsapp.net', id: 'PREKEY-LOW', type: 'encrypt' },
+    content: [{ tag: 'count', attrs: { value: '0' } }]
+  })
+  for (let i = 0; i < 100 && received.filter(n => n.tag === 'iq' && n.attrs.type === 'set' && n.attrs.xmlns === 'encrypt').length === beforeNotif; i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const notifUpload = received.filter(n => n.tag === 'iq' && n.attrs.type === 'set' && n.attrs.xmlns === 'encrypt')
+  check('low pre-key notification triggers upload', notifUpload.length > beforeNotif)
+  const notifAck = received.find(n => n.tag === 'ack' && n.attrs.id === 'PREKEY-LOW')
+  check('pre-key notification acked', notifAck?.attrs.class === 'notification' && notifAck?.attrs.to === '@s.whatsapp.net')
+
+  // markOnlineOnConnect (default true) must announce presence with our push
+  // name, or the linked device shows as inactive on the phone.
+  for (let i = 0; i < 100 && !received.some(n => n.tag === 'presence' && n.attrs.type === 'available'); i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const presence = received.find(n => n.tag === 'presence' && n.attrs.type === 'available')
+  check('available presence sent on connect', !!presence)
+  check('presence carries push name', presence?.attrs.name === 'tester', `got=${presence?.attrs.name}`)
+  check('isOnline emitted', isOnline === true)
 
   await client.close()
   wss.close()

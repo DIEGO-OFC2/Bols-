@@ -80,6 +80,7 @@ export const makeWASocket = (config = {}) => {
         waWebSocketUrl: config.waWebSocketUrl,
         connectTimeoutMs: config.connectTimeoutMs ?? config.defaultQueryTimeoutMs,
         keepAliveIntervalMs: config.keepAliveIntervalMs,
+        markOnlineOnConnect: config.markOnlineOnConnect,
         syncFullHistory: config.syncFullHistory
     };
     if (config.auth)

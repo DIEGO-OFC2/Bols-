@@ -99,6 +99,7 @@ export const makeWASocket = (config: BaileysSocketConfig = {}): WAClient => {
     waWebSocketUrl: config.waWebSocketUrl,
     connectTimeoutMs: config.connectTimeoutMs ?? config.defaultQueryTimeoutMs,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
+    markOnlineOnConnect: config.markOnlineOnConnect,
     syncFullHistory: config.syncFullHistory
   }
   if (config.auth) socketConfig.auth = { creds: config.auth.creds, keys: config.auth.keys }

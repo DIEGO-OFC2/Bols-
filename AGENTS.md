@@ -164,6 +164,15 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   are never pushed, and `<ib><downgrade_webclient/></ib>` must end the socket
   with `multideviceMismatch`. `<ib><edge_routing>` persists `routing_info`.
   `test/lifecycle-test.ts` guards all of this.
+- One-time pre-keys must be *uploaded*, not just generated: after `success` the
+  client queries `<iq type="get" xmlns="encrypt"><count/></iq>` and uploads an
+  initial batch (812, then 5 when low) with
+  `<iq type="set" xmlns="encrypt">`. The server also asks for more via a
+  `<notification type="encrypt"><count value=..>` stanza — *not* an encrypt IQ
+  as the name suggests — which must be answered and acked. With no pre-keys on
+  the server, peers cannot open a Signal session to us, so the socket connects,
+  saves, and then receives nothing. `uploadPreKeys` de-dupes concurrent
+  uploads; the batch size lives in `MIN_PREKEY_COUNT`/`INITIAL_PREKEY_COUNT`.
 - `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
   emits an async error when a still-connecting socket is closed, which would
   otherwise crash the host with an unhandled `'error'` event.

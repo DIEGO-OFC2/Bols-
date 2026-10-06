@@ -31,6 +31,8 @@ export interface SocketConfig {
     pushName?: string;
     connectTimeoutMs?: number;
     keepAliveIntervalMs?: number;
+    /** Send an `available` presence on connect (Baileys default: true). */
+    markOnlineOnConnect?: boolean;
     /** How long each QR stays live (ms). */
     qrTimeout?: number;
     auth?: AuthenticationState;
@@ -56,6 +58,7 @@ export interface ConnectionUpdate {
     qr?: string;
     isNewLogin?: boolean;
     receivedPendingNotifications?: boolean;
+    isOnline?: boolean;
     lastDisconnect?: {
         error?: Error;
         date: Date;
@@ -173,6 +176,8 @@ export declare class WAClient {
     private sentMessages;
     private receiptWaiters;
     private messageRetryCache;
+    /** De-dupes concurrent pre-key uploads (server can request while one is in flight). */
+    private preKeyUpload;
     constructor(config?: SocketConfig);
     private get connectionConfig();
     getUser(): {
@@ -216,6 +221,17 @@ export declare class WAClient {
     /** Lazily create the Signal repository once creds are usable. */
     private getRepository;
     private handlePreKeyUpload;
+    /**
+     * Server notification (`<notification type="encrypt"><count value=..>) telling
+     * us its one-time pre-key supply is low. Upload more, then ack the stanza.
+     */
+    private handleEncryptNotification;
+    /** Ask the server how many one-time pre-keys it still holds for us. */
+    private getAvailablePreKeysOnServer;
+    /** Replenish pre-keys when the server's supply is low or our current key is missing. */
+    private uploadPreKeysIfRequired;
+    private uploadPreKeys;
+    private performPreKeyUpload;
     private generateAndStorePreKeys;
     sendMessage(jid: string, content: IMessage | Record<string, any>, options?: SendMessageOptions): Promise<WAMessage>;
     private buildContent;
