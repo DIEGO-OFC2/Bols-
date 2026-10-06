@@ -8,6 +8,7 @@ import { getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildBuffer, ge
 import { WAClient } from '../src/socket/client.js'
 import { SessionBuilder, SessionCipher, type PreKeyBundle } from '../src/signal/session.js'
 import { encodeMessage } from '../src/proto/message.js'
+import { writeRandomPadMax16 } from '../src/utils/generics.js'
 import { initAuthState } from '../src/utils/auth-utils.js'
 import type { BinaryNode } from '../src/wabinary/types.js'
 import { runServer, waitFor } from './mock-server.js'
@@ -136,7 +137,7 @@ const main = async () => {
   // Peer session is keyed by our LID (the server addresses us by LID).
   const peerCipher = new SessionCipher(peerStorage as any, `${ME_LID}.0`)
   await new SessionBuilder(peerStorage as any, `${ME_LID}.0`).initOutgoing(bundle)
-  const enc = await peerCipher.encrypt(Buffer.from(encodeMessage({ conversation: '.menu' }) as any))
+  const enc = await peerCipher.encrypt(writeRandomPadMax16(encodeMessage({ conversation: '.menu' }) as any))
 
   // Peer sends a LID-addressed message. The stanza carries sender_pn so hosts
   // can resolve the phone-number form.

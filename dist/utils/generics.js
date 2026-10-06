@@ -14,6 +14,31 @@ export const generateRegistrationId = () => Uint16Array.from(randomBytes(2))[0] 
 export const randomBase64 = (bytes) => randomBytes(bytes).toString('base64');
 export const unixTimestampSeconds = (date = new Date()) => Math.floor(date.getTime() / 1000);
 export const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+/**
+ * PKCS#7-style padding with a random length 1..16, matching WhatsApp clients:
+ * the last byte is the pad length and is repeated `padLength` times. Applied to
+ * the *outer* protobuf before Signal encryption and stripped after decryption.
+ */
+export const writeRandomPadMax16 = (msg) => {
+    const pad = randomBytes(1)[0] & 0x0f;
+    const padLength = pad + 1;
+    return Buffer.concat([msg, Buffer.alloc(padLength, padLength)]);
+};
+/**
+ * Strip the random 1..16 byte padding a peer (or we, on the device-sent copy)
+ * appended before encrypting. Real WhatsApp clients always pad, so a plaintext
+ * that is not unpadded before protobuf decode is silently mangled — the "bot is
+ * active but never answers" symptom.
+ */
+export const unpadRandomMax16 = (e) => {
+    const buf = Buffer.isBuffer(e) ? e : Buffer.from(e);
+    if (buf.length === 0)
+        throw new Error('unpadPkcs7 given empty bytes');
+    const padLength = buf[buf.length - 1];
+    if (padLength > buf.length)
+        throw new Error(`unpad given ${buf.length} bytes, but pad is ${padLength}`);
+    return buf.subarray(0, buf.length - padLength);
+};
 export const toNumber = (value) => {
     if (value === null || value === undefined)
         return 0;

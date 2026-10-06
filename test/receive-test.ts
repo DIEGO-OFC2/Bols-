@@ -8,6 +8,7 @@ import { Curve, generateSignalPubKey } from '../src/crypto/index.js'
 import { WAClient } from '../src/socket/client.js'
 import { SignalRepository } from '../src/signal/repository.js'
 import { encodeMessage } from '../src/proto/message.js'
+import { writeRandomPadMax16 } from '../src/utils/generics.js'
 import { decodeBinaryNode } from '../src/wabinary/decode.js'
 import { encodeBinaryNode } from '../src/wabinary/encode.js'
 import { initAuthState, type AuthenticationState } from '../src/utils/auth-utils.js'
@@ -76,7 +77,7 @@ const run = async () => {
   bobState.creds.me = { id: `${BOB}:0@s.whatsapp.net` }
   const bobRepo = repoFor(bobState)
   await bobRepo.injectE2ESession(ME_JID, await bundleFor(meState, 1))
-  const peerEnc = await bobRepo.encryptMessage(ME_JID, encodeMessage({ conversation: 'hola' }))
+  const peerEnc = await bobRepo.encryptMessage(ME_JID, writeRandomPadMax16(encodeMessage({ conversation: 'hola' })))
   const peerMsg = await feed({
     tag: 'message',
     attrs: { from: BOB_JID, id: 'MSG-PEER', t: '1700000000', notify: 'Bob' },
@@ -95,7 +96,7 @@ const run = async () => {
   primaryState.creds.me = { id: ME_DEVICE_JID }
   const primaryRepo = repoFor(primaryState)
   await primaryRepo.injectE2ESession(ME_JID, await bundleFor(meState, 2))
-  const selfEnc = await primaryRepo.encryptMessage(ME_JID, encodeMessage({ conversation: '.menu' }))
+  const selfEnc = await primaryRepo.encryptMessage(ME_JID, writeRandomPadMax16(encodeMessage({ conversation: '.menu' })))
   const selfMsg = await feed({
     tag: 'message',
     attrs: { from: ME_DEVICE_JID, recipient: BOB_JID, id: 'MSG-SELF', t: '1700000001' },
@@ -109,7 +110,7 @@ const run = async () => {
   // Sent by our primary device, decrypted here: same account, different device.
   const primaryDist = await primaryRepo.createSenderKeyDistribution(GROUP, ME, 5)
   await meRepo.processSenderKeyDistribution(GROUP, ME_DEVICE_JID, primaryDist)
-  const groupEnc = await primaryRepo.encryptGroupMessage(GROUP, ME, 5, encodeMessage({ conversation: '#ping' }))
+  const groupEnc = await primaryRepo.encryptGroupMessage(GROUP, ME, 5, writeRandomPadMax16(encodeMessage({ conversation: '#ping' })))
   const groupMsg = await feed({
     tag: 'message',
     attrs: { from: GROUP, participant: ME_DEVICE_JID, id: 'MSG-GROUP', t: '1700000002' },
@@ -123,7 +124,7 @@ const run = async () => {
   // ── group message from a peer (fromMe=false) ─────────────────────────────
   const bobDist = await bobRepo.createSenderKeyDistribution(GROUP, BOB, 0)
   await meRepo.processSenderKeyDistribution(GROUP, BOB_JID, bobDist)
-  const bobGroupEnc = await bobRepo.encryptGroupMessage(GROUP, BOB, 0, encodeMessage({ conversation: '.help' }))
+  const bobGroupEnc = await bobRepo.encryptGroupMessage(GROUP, BOB, 0, writeRandomPadMax16(encodeMessage({ conversation: '.help' })))
   const bobGroupMsg = await feed({
     tag: 'message',
     attrs: { from: GROUP, participant: BOB_JID, id: 'MSG-GROUP-BOB', t: '1700000003' },
@@ -131,6 +132,31 @@ const run = async () => {
   })
   check('group peer emitted', !!bobGroupMsg)
   check('group peer fromMe=false', bobGroupMsg?.key.fromMe === false)
+
+  // ── sender-key distribution delivered over the wire ──────────────────────
+  // lightwa sends the SKDM as its own padded Signal message, so the receive
+  // path must unpad it and register the sender key; a later group message from
+  // the same chain then decrypts.
+  const GROUP2 = '120363000000000099@g.us'
+  const wireDist = await bobRepo.createSenderKeyDistribution(GROUP2, BOB, 0)
+  const skdmWire = await bobRepo.encryptMessage(
+    ME_JID,
+    writeRandomPadMax16(
+      encodeMessage({ senderKeyDistributionMessage: { groupId: GROUP2, axolotlSenderKeyDistributionMessage: wireDist } })
+    )
+  )
+  await feed({
+    tag: 'message',
+    attrs: { from: GROUP2, participant: BOB_JID, id: 'MSG-SKDM', t: '1700000010' },
+    content: [{ tag: 'enc', attrs: { type: skdmWire.type, v: '2' }, content: skdmWire.ciphertext }]
+  })
+  const g2 = await bobRepo.encryptGroupMessage(GROUP2, BOB, 0, writeRandomPadMax16(encodeMessage({ conversation: 'skdm-ok' })))
+  const g2Msg = await feed({
+    tag: 'message',
+    attrs: { from: GROUP2, participant: BOB_JID, id: 'MSG-G2', t: '1700000011' },
+    content: [{ tag: 'enc', attrs: { type: 'skmsg', v: '2' }, content: g2 }]
+  })
+  check('padded wire SKDM registered', g2Msg?.message.conversation === 'skdm-ok', JSON.stringify(g2Msg?.message))
 
   // ── acks mirror WA Web's buildAckStanza ──────────────────────────────────
   const ackForSelf = acks.find(a => a.tag === 'ack' && a.attrs.id === 'MSG-SELF')

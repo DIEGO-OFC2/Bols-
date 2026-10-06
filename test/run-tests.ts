@@ -8,6 +8,7 @@ const suites = [
   'test/handshake-test.ts',
   'test/send-test.ts',
   'test/receive-test.ts',
+  'test/message-padding-test.ts',
   'test/lid-addressing-test.ts',
   'test/command-roundtrip-test.ts',
   'test/lifecycle-test.ts',

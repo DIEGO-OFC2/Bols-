@@ -10,7 +10,7 @@ import type { BinaryNode } from '../wabinary/types.js'
 import { encodeHandshakeMessage, decodeHandshakeMessage } from '../proto/handshake.js'
 import { encodeClientPayload } from '../proto/client-payload.js'
 import { NoiseHandler, NOISE_WA_HEADER } from './noise-handler.js'
-import { bytesToCrockford } from '../utils/generics.js'
+import { bytesToCrockford, unpadRandomMax16, writeRandomPadMax16 } from '../utils/generics.js'
 import { buildAckStanza } from '../utils/stanza-ack.js'
 import { initAuthState, initAuthCreds, type AuthenticationState } from '../utils/auth-utils.js'
 import { buildCompanionFinish, configureSuccessfulPairing, generateLoginNode, generateRegistrationNode, type ConnectionConfig } from '../utils/validate-connection.js'
@@ -761,7 +761,22 @@ export class WAClient {
     if (this.config.markOnlineOnConnect) {
       void this.sendPresenceUpdate('available').catch(() => {})
     }
+    // Presence telemetry Baileys emits on every login/presence flip. It is one
+    // of the signals the phone uses to render the linked device as active
+    // rather than "last seen".
+    void this.sendUnifiedSession().catch(() => {})
     this.ev.emit('connection.update', { connection: 'open' })
+  }
+
+  /**
+   * `<ib><unified_session id="..."/></ib>` — presence telemetry. The id is a
+   * week-bucketed timestamp shifted by 3 days, exactly as Baileys computes it.
+   */
+  private async sendUnifiedSession(): Promise<void> {
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+    const DAY_MS = 24 * 60 * 60 * 1000
+    const id = ((Date.now() + 3 * DAY_MS) % WEEK_MS).toString()
+    await this.sendNode({ tag: 'ib', attrs: {}, content: [{ tag: 'unified_session', attrs: { id } }] })
   }
 
   private buildGroupMetadata(node: BinaryNode): GroupMetadata {
@@ -1077,12 +1092,16 @@ export class WAClient {
     const isGroupLike = isJidGroup(jid)
 
     const content: BinaryNode[] = []
-    const encrypted = encodeMessage(message)
+    const messageBytes = encodeMessage(message)
+    // Real WhatsApp clients pad the outer protobuf before Signal encryption and
+    // strip it on receipt; without the padding a peer's client (and libsignal)
+    // rejects or mis-decodes our payload.
+    const encrypted = writeRandomPadMax16(messageBytes)
     const shouldIncludeDeviceIdentity = { value: false }
 
     const recipients = await this.resolveRecipients(jid, isGroupLike)
     for (const r of recipients) {
-      const { nodes } = await this.encryptForRecipients(repo, r, encrypted, shouldIncludeDeviceIdentity)
+      const { nodes } = await this.encryptForRecipients(repo, r, message, encrypted, shouldIncludeDeviceIdentity)
       content.push(...nodes)
     }
     if (!content.length) throw new Error('No recipients to send to')
@@ -1116,6 +1135,7 @@ export class WAClient {
   private async encryptForRecipients(
     repo: SignalRepository,
     recipient: { jid: string; devices: string[]; group?: string; isGroup: boolean },
+    message: IMessage,
     encrypted: Buffer,
     pkmsgFlag: { value: boolean }
   ): Promise<{ nodes: BinaryNode[]; included: boolean }> {
@@ -1126,12 +1146,15 @@ export class WAClient {
       const group = recipient.group!
       const senderDevice = jidDecode(me.id)?.device ?? 0
       await this.assertSessions(recipient.devices)
-      // SKDM once, then the group message.
+      // SKDM once, then the group message. lightwa delivers the sender-key
+      // distribution as its own Signal message, so it must carry the same
+      // random padding as any other payload — the receive path unpads before
+      // decoding, and an unpadded control message would be mis-read as pad.
       if (!(await repo.hasSenderKey(group, jidDecode(me.id)!.user!, senderDevice))) {
         const skdm = await repo.createSenderKeyDistribution(group, jidDecode(me.id)!.user!, senderDevice)
-        const skdmMsg = encodeMessage({
+        const skdmMsg = writeRandomPadMax16(encodeMessage({
           senderKeyDistributionMessage: { groupId: group, axolotlSenderKeyDistributionMessage: skdm }
-        })
+        }))
         for (const device of recipient.devices) {
           const res = await repo.encryptMessage(device, skdmMsg)
           if (res.type === 'pkmsg') pkmsgFlag.value = true
@@ -1151,9 +1174,13 @@ export class WAClient {
       if (res.type === 'pkmsg') pkmsgFlag.value = true
       nodes.push({ tag: 'to', attrs: { jid: device }, content: [{ tag: 'enc', attrs: { v: '2', type: res.type }, content: res.ciphertext }] })
     }
-    // Also deliver to our own other devices.
+    // Also deliver to our own other devices, wrapped in a device-sent envelope
+    // that carries the *unpadded* inner message (as Baileys does). The envelope
+    // itself is padded like any other payload before encryption.
     for (const device of ownDevices) {
-      const dsMessage = encodeMessage({ deviceSentMessage: { destinationJid: recipient.jid, message: decodeMessage(encrypted) } })
+      const dsMessage = writeRandomPadMax16(
+        encodeMessage({ deviceSentMessage: { destinationJid: recipient.jid, message } })
+      )
       const res = await repo.encryptMessage(device, dsMessage)
       nodes.push({ tag: 'to', attrs: { jid: device }, content: [{ tag: 'enc', attrs: { v: '2', type: res.type }, content: res.ciphertext }] })
     }
@@ -1541,7 +1568,8 @@ export class WAClient {
       plaintext = await repo.decryptMessage(decryptionJid, type, ciphertext)
     }
 
-    const message = decodeMessage(plaintext)
+    const unpadded = unpadRandomMax16(plaintext)
+    const message = decodeMessage(unpadded)
     // Unwrap device-sent and process group sender-key distributions.
     if (message.senderKeyDistributionMessage?.axolotlSenderKeyDistributionMessage) {
       await repo.processSenderKeyDistribution(from, authorJid, message.senderKeyDistributionMessage.axolotlSenderKeyDistributionMessage)
@@ -1549,7 +1577,7 @@ export class WAClient {
     if (message.deviceSentMessage) {
       return { plaintext: encodeMessage(message.deviceSentMessage.message) }
     }
-    return { plaintext }
+    return { plaintext: unpadded }
   }
 
   /** Ack a received notification/info stanza; no-op when it carries no id/from. */
@@ -1805,6 +1833,7 @@ export class WAClient {
     // `composing`/`recording`/`paused` are per-chat chatstate stanzas.
     if (type === 'available' || type === 'unavailable') {
       this.ev.emit('connection.update', { isOnline: type === 'available' })
+      if (type === 'available') void this.sendUnifiedSession().catch(() => {})
       // A QR-linked companion has no push name until app-state sync (which
       // lightwa does not implement yet), but the presence stanza still flips the
       // linked device to online on the phone. Baileys bails out when `me.name`

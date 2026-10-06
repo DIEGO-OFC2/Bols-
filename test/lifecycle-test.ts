@@ -85,12 +85,23 @@ const main = async () => {
   const activeChild = Array.isArray(activeIq?.content) ? (activeIq!.content as BinaryNode[])[0] : undefined
   check('passive iq carries <active/>', activeChild?.tag === 'active')
 
-  // Server offers the offline queue; client must answer with an offline_batch.
-  serverSend!({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_preview', attrs: {} }] })
-  for (let i = 0; i < 100 && !received.some(n => n.tag === 'ib'); i++) {
+  // Presence telemetry: Baileys sends <ib><unified_session id=..> on login.
+  for (let i = 0; i < 100 && !received.some(n => n.tag === 'ib' && Array.isArray(n.content) && (n.content as BinaryNode[])[0]?.tag === 'unified_session'); i++) {
     await new Promise(r => setTimeout(r, 10))
   }
-  const batch = received.find(n => n.tag === 'ib')
+  const sessionIb = received.find(n => n.tag === 'ib' && Array.isArray(n.content) && (n.content as BinaryNode[])[0]?.tag === 'unified_session')
+  const sessionChild = sessionIb ? (sessionIb.content as BinaryNode[])[0] : undefined
+  check('unified_session sent on connect', !!sessionChild)
+  check('unified_session id is a week-bucket', !!sessionChild && /^\d+$/.test(sessionChild.attrs.id ?? ''))
+
+  // Server offers the offline queue; client must answer with an offline_batch.
+  serverSend!({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_preview', attrs: {} }] })
+  const isOfflineBatch = (n: BinaryNode) =>
+    n.tag === 'ib' && Array.isArray(n.content) && (n.content as BinaryNode[]).some(c => c.tag === 'offline_batch')
+  for (let i = 0; i < 100 && !received.some(isOfflineBatch); i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const batch = received.find(isOfflineBatch)
   check('offline_batch requested', !!batch)
   const batchChild = Array.isArray(batch?.content) ? (batch!.content as BinaryNode[])[0] : undefined
   check('offline_batch count=100', batchChild?.tag === 'offline_batch' && batchChild.attrs.count === '100')

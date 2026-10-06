@@ -11,6 +11,7 @@ import { getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildBuffer, ge
 import { WAClient } from '../src/socket/client.js'
 import { SessionBuilder, SessionCipher, type PreKeyBundle } from '../src/signal/session.js'
 import { encodeMessage } from '../src/proto/message.js'
+import { writeRandomPadMax16 } from '../src/utils/generics.js'
 import { initAuthState } from '../src/utils/auth-utils.js'
 import type { BinaryNode } from '../src/wabinary/types.js'
 import { runServer, waitFor } from './mock-server.js'
@@ -138,7 +139,7 @@ const main = async () => {
 
   // 1) PN-addressed first message carrying sender_lid — the envelope that
   //    teaches us the LID<->PN mapping.
-  const first = await peerCipher.encrypt(Buffer.from(encodeMessage({ conversation: '.menu' }) as any))
+  const first = await peerCipher.encrypt(writeRandomPadMax16(encodeMessage({ conversation: '.menu' }) as any))
   check('peer produced a pkmsg', first.type === 3)
   serverSend!({
     tag: 'message',
@@ -157,7 +158,7 @@ const main = async () => {
   check('first text decoded', upserts[0]?.message?.conversation === '.menu', JSON.stringify(upserts[0]?.message))
 
   // 2) LID-addressed follow-up — must reach the migrated session.
-  const second = await peerCipher.encrypt(Buffer.from(encodeMessage({ conversation: '.ping' }) as any))
+  const second = await peerCipher.encrypt(writeRandomPadMax16(encodeMessage({ conversation: '.ping' }) as any))
   check('peer produced a follow-up msg', second.type === 3)
   serverSend!({
     tag: 'message',

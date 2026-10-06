@@ -8,6 +8,7 @@ import { getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildBuffer, ge
 import { WAClient } from '../src/socket/client.js'
 import { SessionBuilder, SessionCipher, type PreKeyBundle } from '../src/signal/session.js'
 import { encodeMessage, decodeMessage } from '../src/proto/message.js'
+import { writeRandomPadMax16, unpadRandomMax16 } from '../src/utils/generics.js'
 import { initAuthState } from '../src/utils/auth-utils.js'
 import type { BinaryNode } from '../src/wabinary/types.js'
 import { runServer, waitFor } from './mock-server.js'
@@ -140,7 +141,7 @@ const main = async () => {
   const peerCipher = new SessionCipher(peerStorage as any, '15559999999.0')
   const builder = new SessionBuilder(peerStorage as any, '15559999999.0')
   await builder.initOutgoing(bundle)
-  const enc = await peerCipher.encrypt(Buffer.from(encodeMessage({ conversation: '.menu' }) as any))
+  const enc = await peerCipher.encrypt(writeRandomPadMax16(encodeMessage({ conversation: '.menu' }) as any))
   check('peer produced a pkmsg', enc.type === 3)
 
   serverSend!({
@@ -166,7 +167,7 @@ const main = async () => {
   check('reply has exactly one <to>', toNodes.length === 1, `to=${toNodes.length}`)
   const replyEnc = getBinaryNodeChild(toNodes[0], 'enc')!
   const decrypted = await peerCipher.decryptWhisperMessage(Buffer.from(replyEnc.content as Uint8Array))
-  const replyBody = decodeMessage(decrypted)
+  const replyBody = decodeMessage(unpadRandomMax16(decrypted))
   check('peer decrypts the reply', replyBody.extendedTextMessage?.text === 'pong', JSON.stringify(replyBody))
 
   await client.close()

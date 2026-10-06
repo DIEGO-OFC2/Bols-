@@ -230,6 +230,11 @@ export declare class WAClient {
     private handleCompanionRegNotification;
     private handlePairSuccess;
     private handleSuccess;
+    /**
+     * `<ib><unified_session id="..."/></ib>` — presence telemetry. The id is a
+     * week-bucketed timestamp shifted by 3 days, exactly as Baileys computes it.
+     */
+    private sendUnifiedSession;
     private buildGroupMetadata;
     private handleGroupNotification;
     /** Lazily create the Signal repository once creds are usable. */

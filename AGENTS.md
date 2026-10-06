@@ -77,6 +77,20 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   zero-copy `subarray` reads) rather than the generic `ProtoWriter`/`ProtoReader`,
   which allocates a `Buffer` per varint byte. Verify any codec change with
   `test/message-cross-test.ts` (byte-identical to WAProto) and `npm run bench`.
+- Signal payloads are padded, not raw protobuf. WhatsApp clients run the encoded
+  `Message` through `writeRandomPadMax16` (PKCS#7-style, random length 1..16)
+  before Signal encryption and `unpadRandomMax16` after decryption; the padding
+  is what a peer's libsignal `getPadding` expects. lightwa did neither, so a real
+  peer's padded message went straight into `decodeMessage` and threw
+  `unsupported proto wire type 6`, which surfaced as "session active but the bot
+  never answers". The pad is applied to the *outer* payload in
+  `sendBuiltMessage` (the device-sent copy carries an *unpadded* inner
+  `message`, matching Baileys) and stripped in `decryptMessageNode` before
+  decode — `unpadRandomMax16` returns the unpadded buffer, so the receive path
+  must return *that*, not the raw plaintext. The sender-key distribution message
+  is a Signal control message and is encrypted without padding.
+  `test/message-padding-test.ts` covers every pad length inbound and the padded
+  outbound stanza.
 - The native addon is strictly optional and must never be a hard dependency.
   `src/crypto/native.ts` returns `null` on any failure (missing binary, bad ABI,
   no `dlopen`) and every call site must fall back to `@noble/hashes`. The addon
