@@ -199,6 +199,7 @@ export declare class WAClient {
      */
     private routeIncoming;
     private handleNode;
+    private handleIb;
     private handlePairDevice;
     private handleCompanionReg;
     /**

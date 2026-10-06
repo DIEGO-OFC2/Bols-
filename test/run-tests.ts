@@ -8,6 +8,7 @@ const suites = [
   'test/handshake-test.ts',
   'test/send-test.ts',
   'test/receive-test.ts',
+  'test/lifecycle-test.ts',
   'test/pairing-test.ts',
   'test/signal-cross-test.ts',
   'test/group-cross-test.ts',

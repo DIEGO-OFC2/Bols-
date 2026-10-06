@@ -553,7 +553,38 @@ export class WAClient {
       return
     }
 
-    if (tag === 'ib' || tag === 'chatstate' || tag === 'presence') return
+    // Server-driven "information" stanzas. Most are informational, but
+    // `offline_preview` must be answered with an `offline_batch` request or the
+    // server never pushes the pending/offline messages, and
+    // `downgrade_webclient` means multi-device is not joined.
+    if (tag === 'ib') return void this.handleIb(node)
+
+    if (tag === 'chatstate' || tag === 'presence') return
+  }
+
+  private handleIb(node: BinaryNode): void {
+    const children = Array.isArray(node.content) ? (node.content as BinaryNode[]) : []
+    const child = children[0]
+    switch (child?.tag) {
+      case 'offline_preview':
+        // Ask the server to flush the queued offline messages; it then streams
+        // them followed by an <ib><offline count=..></ib> marker.
+        void this.sendNode({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_batch', attrs: { count: '100' } }] }).catch(() => {})
+        return
+      case 'edge_routing': {
+        const routingInfo = getBinaryNodeChild(getBinaryNodeChild(child, 'edge_routing'), 'routing_info')
+        if (routingInfo?.content) this.authState.creds.routingInfo = Buffer.from(routingInfo.content as Uint8Array)
+        return
+      }
+      case 'offline':
+        this.ev.emit('connection.update', { receivedPendingNotifications: true })
+        return
+      case 'downgrade_webclient':
+        void this.end(new Error('Multi-device beta not joined'), DisconnectReason.multideviceMismatch)
+        return
+      default:
+        return
+    }
   }
 
   private handlePairDevice(stanza: BinaryNode, pairDevice: BinaryNode): void {
@@ -642,6 +673,15 @@ export class WAClient {
     const me = this.authState.creds.me
     if (node.attrs.lid && me) me.lid = node.attrs.lid
     this.user = me ? { id: me.id, name: me.name, lid: me.lid } : undefined
+    // Login goes out with `passive: true` (see `generateLoginNode`), which makes
+    // the server hold back the message stream. Baileys flips to active right
+    // after `success`; without it the socket stays connected but stops receiving
+    // anything after the initial burst.
+    void this.query({
+      tag: 'iq',
+      attrs: { to: S_WHATSAPP_NET, xmlns: 'passive', type: 'set' },
+      content: [{ tag: 'active', attrs: {} }]
+    }).catch(() => {})
     this.ev.emit('connection.update', { connection: 'open' })
   }
 

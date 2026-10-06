@@ -154,6 +154,16 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   `creds.me.id` **and** `creds.me.lid` with `areJidsSameUser`. `test/receive-test.ts`
   covers 1:1 peer, self-echo, and group echo. Acks must target the stanza's
   `from`, not the chat.
+- The login payload goes out with `passive: true`; the server then holds back
+  the message stream. Baileys flips to active with
+  `<iq to="s.whatsapp.net" xmlns="passive" type="set"><active/></iq>` right
+  after `success`. Without it the socket stays connected (and reconnects on
+  restart) but silently stops receiving messages — the "connects, saves, then
+  goes stale" symptom. Likewise, `<ib><offline_preview/></ib>` must be answered
+  with `<ib><offline_batch count="100"/></ib>` or the queued/offline messages
+  are never pushed, and `<ib><downgrade_webclient/></ib>` must end the socket
+  with `multideviceMismatch`. `<ib><edge_routing>` persists `routing_info`.
+  `test/lifecycle-test.ts` guards all of this.
 - `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
   emits an async error when a still-connecting socket is closed, which would
   otherwise crash the host with an unhandled `'error'` event.
