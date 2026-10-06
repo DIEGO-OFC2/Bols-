@@ -523,7 +523,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							await upsertMessage(fullMessage, 'append')
 							logger.debug('Processed plaintext newsletter message')
 						} catch (error) {
-							logger.error({ error }, 'Failed to decode plaintext newsletter message')
+							logger.error({ err: error }, 'Failed to decode plaintext newsletter message')
 						}
 					}
 
@@ -624,7 +624,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					forceIncludeKeys = true
 				}
 			} catch (error) {
-				logger.warn({ error, fromJid }, 'failed to check session recreation')
+				logger.warn({ err: error, fromJid }, 'failed to check session recreation')
 			}
 		}
 
@@ -639,7 +639,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 							`sendRetryRequest: requested placeholder resend (${requestId}) for message ${msgId} (scheduled)`
 						)
 					} catch (error) {
-						logger.warn({ error, msgId }, 'failed to send scheduled phone request')
+						logger.warn({ err: error, msgId }, 'failed to send scheduled phone request')
 					}
 				})
 			} else {
@@ -1054,7 +1054,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				try {
 					await handleDevicesNotification(node)
 				} catch (error) {
-					logger.error({ error, node }, 'failed to handle devices notification')
+					logger.error({ err: error, node }, 'failed to handle devices notification')
 				}
 
 				break
@@ -1364,7 +1364,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				injectedFromBundle = true
 				logger.debug({ participant, retryCount }, 'injected session from retry receipt key bundle')
 			} catch (error) {
-				logger.warn({ error, participant }, 'failed to inject session from retry receipt')
+				logger.warn({ err: error, participant }, 'failed to inject session from retry receipt')
 			}
 		}
 
@@ -1414,7 +1414,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 					await authState.keys.set({ session: { [sessionId]: null } })
 				}
 			} catch (error) {
-				logger.warn({ error, participant }, 'failed to check session recreation for outgoing retry')
+				logger.warn({ err: error, participant }, 'failed to check session recreation for outgoing retry')
 			}
 		}
 
@@ -1769,7 +1769,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 				await upsertMessage(msg, node.attrs.offline ? 'append' : 'notify')
 			})
 		} catch (error) {
-			logger.error({ error, node: binaryNodeToString(node) }, 'error in handling message')
+			logger.error({ err: error, node: binaryNodeToString(node) }, 'error in handling message')
 			if (!acked) {
 				await sendMessageAck(node, NACK_REASONS.UnhandledError).catch(ackErr =>
 					logger.error({ ackErr }, 'failed to ack message after error')
@@ -1833,7 +1833,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 
 			ev.emit('call', [call])
 		} catch (error) {
-			logger.error({ error, node: binaryNodeToString(node) }, 'error in handling call')
+			logger.error({ err: error, node: binaryNodeToString(node) }, 'error in handling call')
 		} finally {
 			await sendMessageAck(node).catch(ackErr => logger.error({ ackErr }, 'failed to ack call'))
 		}

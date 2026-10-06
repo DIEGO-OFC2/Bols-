@@ -577,7 +577,7 @@ export const makeSocket = (config: SocketConfig) => {
 				logger.debug(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
 			}
 		} catch (error) {
-			logger.error({ error }, 'Failed to check/upload pre-keys during initialization')
+			logger.error({ err: error }, 'Failed to check/upload pre-keys during initialization')
 			// Don't throw - allow connection to continue even if pre-key check fails
 		}
 	}
@@ -958,7 +958,7 @@ export const makeSocket = (config: SocketConfig) => {
 
 					logger.info({ myPN, myLID }, 'Own LID session created successfully')
 				} catch (error) {
-					logger.error({ error, lid: myLID }, 'Failed to create own LID session')
+					logger.error({ err: error, lid: myLID }, 'Failed to create own LID session')
 				}
 			})
 		}
@@ -1087,7 +1087,7 @@ export const makeSocket = (config: SocketConfig) => {
 		try {
 			await sendNode(node)
 		} catch (error) {
-			logger.debug({ error }, 'failed to send unified_session telemetry')
+			logger.debug({ err: error }, 'failed to send unified_session telemetry')
 		}
 	}
 

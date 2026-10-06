@@ -86,7 +86,7 @@ export async function handleIdentityChange(
 		await ctx.assertSessions([from], true)
 		return { action: 'session_refreshed' }
 	} catch (error) {
-		ctx.logger.warn({ error, jid: from }, 'failed to assert sessions after identity change')
+		ctx.logger.warn({ err: error, jid: from }, 'failed to assert sessions after identity change')
 		return { action: 'session_refresh_failed', error }
 	}
 }

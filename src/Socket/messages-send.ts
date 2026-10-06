@@ -425,7 +425,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 						'stored user device lists for bulk migration'
 					)
 				} catch (error) {
-					logger.warn({ error }, 'failed to store user device lists')
+					logger.warn({ err: error }, 'failed to store user device lists')
 				}
 			}
 		}
