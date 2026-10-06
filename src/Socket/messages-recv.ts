@@ -151,7 +151,11 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		config.callOfferCache || makeBoundedCache(DEFAULT_CACHE_SIZES.CALL_OFFER, DEFAULT_CACHE_TTLS.CALL_OFFER * 1000)
 
 	// Debounce identity-change session refreshes per JID to avoid bursts
-	const identityAssertDebounce = new NodeCache<boolean>({ stdTTL: 5, useClones: false })
+	const identityAssertDebounce = new NodeCache<boolean>({
+		stdTTL: 5,
+		maxKeys: DEFAULT_CACHE_SIZES.IDENTITY_DEBOUNCE,
+		useClones: false
+	})
 
 	let sendActiveReceipts = false
 
