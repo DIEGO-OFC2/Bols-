@@ -1,7 +1,6 @@
-import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto/index.js'
-import { DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
+import { DEFAULT_CACHE_SIZES, DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
 import type {
 	AnyMessageContent,
 	GroupMetadata,
@@ -36,6 +35,7 @@ import {
 	parseAndInjectE2ESessions,
 	unixTimestampSeconds
 } from '../Utils'
+import { makeBoundedCache } from '../Utils/cache-utils'
 import { getUrlInfo } from '../Utils/link-preview'
 import { makeKeyedMutex, makeMutex } from '../Utils/make-mutex'
 import { getMessageReportingToken, shouldIncludeReportingToken } from '../Utils/reporting-utils'
@@ -108,10 +108,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 
 	const userDevicesCache =
 		config.userDevicesCache ||
-		new NodeCache<JidWithDevice[]>({
-			stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, // 5 minutes
-			useClones: false
-		})
+		makeBoundedCache(DEFAULT_CACHE_SIZES.USER_DEVICES, DEFAULT_CACHE_TTLS.USER_DEVICES * 1000)
 
 	/**
 	 * Group metadata is stable for minutes at a time, but a group send needs the
@@ -119,10 +116,10 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 	 * a full `w:g2` IQ round-trip. Cache it and invalidate on the group events we
 	 * already receive, so the TTL is only a safety net.
 	 */
-	const groupMetadataCache = new NodeCache<GroupMetadata>({
-		stdTTL: DEFAULT_CACHE_TTLS.GROUP_METADATA,
-		useClones: false
-	})
+	const groupMetadataCache = makeBoundedCache(
+		DEFAULT_CACHE_SIZES.GROUP_METADATA,
+		DEFAULT_CACHE_TTLS.GROUP_METADATA * 1000
+	)
 
 	const invalidateGroupMetadata = (jids: (string | undefined)[]) => {
 		for (const jid of jids) {
@@ -733,7 +730,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			if (isGroupOrStatus && !isRetryResend) {
 				const [groupData, senderKeyMap] = await Promise.all([
 					(async () => {
-						let groupData = await groupMetadataCache.get(jid)
+						let groupData = await groupMetadataCache.get<GroupMetadata>(jid)
 						if (!groupData && useCachedGroupMetadata && cachedGroupMetadata) {
 							groupData = await cachedGroupMetadata(jid)
 							if (groupData) {

@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto'
 import Long from 'long'
 import { proto } from '../../WAProto/index.js'
 import {
+	DEFAULT_CACHE_SIZES,
 	DEFAULT_CACHE_TTLS,
 	KEY_BUNDLE_TYPE,
 	MIN_PREKEY_COUNT,
@@ -53,6 +54,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
+import { makeBoundedCache } from '../Utils/cache-utils'
 import { makeMutex } from '../Utils/make-mutex'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
@@ -144,17 +146,9 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	const retryMutex = makeMutex()
 
 	const msgRetryCache =
-		config.msgRetryCounterCache ||
-		new NodeCache<number>({
-			stdTTL: DEFAULT_CACHE_TTLS.MSG_RETRY, // 1 hour
-			useClones: false
-		})
+		config.msgRetryCounterCache || makeBoundedCache(DEFAULT_CACHE_SIZES.MSG_RETRY, DEFAULT_CACHE_TTLS.MSG_RETRY * 1000)
 	const callOfferCache =
-		config.callOfferCache ||
-		new NodeCache<WACallEvent>({
-			stdTTL: DEFAULT_CACHE_TTLS.CALL_OFFER, // 5 mins
-			useClones: false
-		})
+		config.callOfferCache || makeBoundedCache(DEFAULT_CACHE_SIZES.CALL_OFFER, DEFAULT_CACHE_TTLS.CALL_OFFER * 1000)
 
 	// Debounce identity-change session refreshes per JID to avoid bursts
 	const identityAssertDebounce = new NodeCache<boolean>({ stdTTL: 5, useClones: false })

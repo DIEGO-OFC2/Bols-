@@ -1,10 +1,13 @@
-import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
 import { proto } from '../../WAProto/index.js'
-import { DEFAULT_CACHE_TTLS, HISTORY_SYNC_PAUSED_TIMEOUT_MS, PROCESSABLE_HISTORY_TYPES } from '../Defaults'
+import {
+	DEFAULT_CACHE_SIZES,
+	DEFAULT_CACHE_TTLS,
+	HISTORY_SYNC_PAUSED_TIMEOUT_MS,
+	PROCESSABLE_HISTORY_TYPES
+} from '../Defaults'
 import type {
 	BotListInfo,
-	CacheStore,
 	ChatModification,
 	ChatMutation,
 	LTHashState,
@@ -45,6 +48,7 @@ import {
 	newLTHashState,
 	processSyncAction
 } from '../Utils'
+import { makeBoundedCache } from '../Utils/cache-utils'
 import { makeMutex } from '../Utils/make-mutex'
 import processMessage from '../Utils/process-message'
 import { buildTcTokenFromJid } from '../Utils/tc-token-utils'
@@ -144,10 +148,7 @@ export const makeChatsSocket = (config: SocketConfig) => {
 
 	const placeholderResendCache =
 		config.placeholderResendCache ||
-		(new NodeCache<number>({
-			stdTTL: DEFAULT_CACHE_TTLS.MSG_RETRY, // 1 hour
-			useClones: false
-		}) as CacheStore)
+		makeBoundedCache(DEFAULT_CACHE_SIZES.PLACEHOLDER_RESEND, DEFAULT_CACHE_TTLS.MSG_RETRY * 1000)
 
 	/** helper function to fetch the given app state sync key */
 	const getAppStateSyncKey = async (keyId: string) => {

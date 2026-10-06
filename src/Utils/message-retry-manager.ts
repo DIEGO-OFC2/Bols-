@@ -66,7 +66,6 @@ export class MessageRetryManager {
 	private recentMessagesMap = new LRUCache<string, RecentMessage>({
 		max: RECENT_MESSAGES_SIZE,
 		ttl: 5 * 60 * 1000,
-		ttlAutopurge: true,
 		dispose: (_value: RecentMessage, key: string) => {
 			const separatorIndex = key.lastIndexOf(MESSAGE_KEY_SEPARATOR)
 			if (separatorIndex > -1) {
@@ -77,18 +76,17 @@ export class MessageRetryManager {
 	})
 	private messageKeyIndex = new Map<string, string>()
 	private sessionRecreateHistory = new LRUCache<string, number>({
-		ttl: RECREATE_SESSION_TIMEOUT * 2,
-		ttlAutopurge: true
+		max: 2_048,
+		ttl: RECREATE_SESSION_TIMEOUT * 2
 	})
 	private retryCounters = new LRUCache<string, number>({
+		max: 4_096,
 		ttl: 15 * 60 * 1000,
-		ttlAutopurge: true,
 		updateAgeOnGet: true
 	}) // 15 minutes TTL
 	private baseKeys = new LRUCache<string, Uint8Array>({
 		max: 1024,
-		ttl: 15 * 60 * 1000,
-		ttlAutopurge: true
+		ttl: 15 * 60 * 1000
 	})
 	private pendingPhoneRequests: PendingPhoneRequest = {}
 	private readonly maxMsgRetryCount: number = 5

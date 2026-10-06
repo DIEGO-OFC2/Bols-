@@ -5,8 +5,8 @@ import { isHostedPnUser, isLidUser, isPnUser, jidDecode, jidNormalizedUser, WAJI
 
 export class LIDMappingStore {
 	private readonly mappingCache = new LRUCache<string, string>({
-		ttl: 3 * 24 * 60 * 60 * 1000, // 7 days
-		ttlAutopurge: true,
+		max: 5_000,
+		ttl: 3 * 24 * 60 * 60 * 1000, // 3 days
 		updateAgeOnGet: true
 	})
 	private readonly keys: SignalKeyStoreWithTransaction

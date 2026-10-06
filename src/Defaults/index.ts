@@ -59,6 +59,20 @@ export const DEFAULT_CACHE_TTLS = {
 	GROUP_METADATA: 5 * 60 // 5 minutes
 }
 
+/**
+ * Entry caps for the socket's internal caches. TTLs alone don't bound memory:
+ * a long-lived session keeps inserting distinct keys (users, groups, retry
+ * entries) faster than they expire, so each cache also needs a ceiling.
+ */
+export const DEFAULT_CACHE_SIZES = {
+	USER_DEVICES: 5_000,
+	GROUP_METADATA: 1_000,
+	SIGNAL_STORE: 10_000,
+	MSG_RETRY: 2_000,
+	CALL_OFFER: 500,
+	PLACEHOLDER_RESEND: 2_000
+}
+
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {
 	version: version as WAVersion,
 	browser: Browsers.macOS('Chrome'),

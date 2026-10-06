@@ -1,10 +1,9 @@
-import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
 import { AsyncLocalStorage } from 'async_hooks'
 import { Mutex } from 'async-mutex'
 import { randomBytes } from 'crypto'
 import PQueue from 'p-queue'
-import { DEFAULT_CACHE_TTLS } from '../Defaults'
+import { DEFAULT_CACHE_SIZES, DEFAULT_CACHE_TTLS } from '../Defaults'
 import type {
 	AuthenticationCreds,
 	CacheStore,
@@ -14,6 +13,7 @@ import type {
 	SignalKeyStoreWithTransaction,
 	TransactionCapabilityOptions
 } from '../Types'
+import { makeBoundedCache } from './cache-utils'
 import { Curve, signedKeyPair } from './crypto'
 import { delay, generateRegistrationId } from './generics'
 import type { ILogger } from './logger'
@@ -39,13 +39,7 @@ export function makeCacheableSignalKeyStore(
 	logger?: ILogger,
 	_cache?: CacheStore
 ): SignalKeyStore {
-	const cache =
-		_cache ||
-		new NodeCache<SignalDataTypeMap[keyof SignalDataTypeMap]>({
-			stdTTL: DEFAULT_CACHE_TTLS.SIGNAL_STORE, // 5 minutes
-			useClones: false,
-			deleteOnExpire: true
-		})
+	const cache = _cache || makeBoundedCache(DEFAULT_CACHE_SIZES.SIGNAL_STORE, DEFAULT_CACHE_TTLS.SIGNAL_STORE * 1000)
 
 	// Mutex for protecting cache operations
 	const cacheMutex = new Mutex()
