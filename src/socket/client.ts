@@ -546,6 +546,10 @@ export class WAClient {
 
     if (tag === 'notification') {
       if (attrs.type === 'w:gp2') return void this.handleGroupNotification(node)
+      // The phone triggers the second pairing leg with a `primary_hello`
+      // notification once the user enters the code. Without handling it the
+      // companion never sends `companion_finish` and no `pair-success` arrives.
+      if (attrs.type === 'link_code_companion_reg') return void this.handleCompanionRegNotification(node)
       return
     }
 
@@ -590,6 +594,34 @@ export class WAClient {
       await this.sendNode(node)
     } catch (err) {
       void this.end(err as Error)
+    }
+  }
+
+  /**
+   * Handle the phone's `primary_hello` notification: answer with
+   * `companion_finish`, then ack. The server replies to the finish IQ and later
+   * emits `pair-success`. Notifications that arrive without the pairing payload
+   * are acked and ignored.
+   */
+  private async handleCompanionRegNotification(node: BinaryNode): Promise<void> {
+    const from = node.attrs.from
+    const id = node.attrs.id
+    try {
+      const reg = getBinaryNodeChild(node, 'link_code_companion_reg')
+      const hasPayload =
+        reg?.attrs.stage === 'primary_hello' &&
+        getBinaryNodeChild(reg, 'link_code_pairing_ref') &&
+        getBinaryNodeChild(reg, 'primary_identity_pub') &&
+        getBinaryNodeChild(reg, 'link_code_pairing_wrapped_primary_ephemeral_pub')
+      if (hasPayload) await this.handleCompanionReg(reg!)
+    } finally {
+      if (from && id) {
+        await this.sendNode({
+          tag: 'ack',
+          attrs: { id, to: from, class: 'notification', type: 'link_code_companion_reg' },
+          content: undefined
+        }).catch(() => {})
+      }
     }
   }
 

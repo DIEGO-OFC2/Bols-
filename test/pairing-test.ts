@@ -110,7 +110,8 @@ const run = async () => {
  * code before the socket is open, the mock server answers with a
  * `link_code_companion_reg`, and the client completes `companion_finish`.
  * Reproduces the "noise not initialised" regression when the handshake is not
- * awaited before the request goes out.
+ * awaited before the request goes out, and the "session never saves" regression
+ * when the `primary_hello` notification is not routed.
  */
 const runE2E = async () => {
   const ca = Curve.generateKeyPair()
@@ -125,27 +126,58 @@ const runE2E = async () => {
   const primaryIdentity = Curve.generateKeyPair()
   let helloJid: string | undefined
   let finishNode: any
+  let ackedNotification = false
+
+  const buildWrapped = async (code: string) => {
+    const salt = randomBytes(32)
+    const iv = randomBytes(16)
+    const wrappingKey = await derivePairingCodeKey(code, salt)
+    return Buffer.concat([salt, iv, aesEncryptCTR(primaryEphemeral.public, wrappingKey, iv)])
+  }
 
   ctx.onNode = async (node: any, send: (node: any) => void) => {
+    if (node.tag === 'ack') {
+      if (node.attrs.type === 'link_code_companion_reg') ackedNotification = true
+      return
+    }
     if (node.tag !== 'iq') return
     const reg = getBinaryNodeChild(node, 'link_code_companion_reg')
     if (!reg) return
     if (reg.attrs.stage === 'companion_hello') {
       helloJid = reg.attrs.jid
       const code = client.authState.creds.pairingCode!
-      const salt = randomBytes(32)
-      const iv = randomBytes(16)
-      const wrappingKey = await derivePairingCodeKey(code, salt)
-      const wrapped = Buffer.concat([salt, iv, aesEncryptCTR(primaryEphemeral.public, wrappingKey, iv)])
+      const wrapped = await buildWrapped(code)
+      // Server ACKs the hello with the pairing ref.
       send({
-        tag: 'link_code_companion_reg',
-        attrs: {},
+        tag: 'iq',
+        attrs: { from: '@s.whatsapp.net', type: 'result', id: node.attrs.id },
         content: [
-          { tag: 'link_code_pairing_ref', attrs: {}, content: Buffer.from('REF-E2E') },
-          { tag: 'primary_identity_pub', attrs: {}, content: primaryIdentity.public },
-          { tag: 'link_code_pairing_wrapped_primary_ephemeral_pub', attrs: {}, content: wrapped }
+          {
+            tag: 'link_code_companion_reg',
+            attrs: { stage: 'companion_hello' },
+            content: [{ tag: 'link_code_pairing_ref', attrs: {}, content: Buffer.from('REF-E2E') }]
+          }
         ]
       })
+      // Once the user enters the code the phone sends a `primary_hello`
+      // notification carrying the primary identity + wrapped ephemeral key.
+      setTimeout(() => {
+        send({
+          tag: 'notification',
+          attrs: { from: '15550000000@s.whatsapp.net', id: 'ntf-1', type: 'link_code_companion_reg' },
+          content: [
+            {
+              tag: 'link_code_companion_reg',
+              attrs: { stage: 'primary_hello' },
+              content: [
+                { tag: 'link_code_pairing_ref', attrs: {}, content: Buffer.from('REF-E2E') },
+                { tag: 'primary_identity_pub', attrs: {}, content: primaryIdentity.public },
+                { tag: 'link_code_pairing_wrapped_primary_ephemeral_pub', attrs: {}, content: wrapped }
+              ]
+            }
+          ]
+        })
+      }, 40)
     } else if (reg.attrs.stage === 'companion_finish') {
       finishNode = reg
     }
@@ -167,8 +199,9 @@ const runE2E = async () => {
   check('pairing code is 8 crockford chars', /^[0-9A-HJKMNP-TV-Z]{8}$/.test(code), code)
 
   // The server answers asynchronously; wait for companion_finish to land.
-  for (let i = 0; i < 100 && !finishNode; i++) await new Promise(r => setTimeout(r, 20))
+  for (let i = 0; i < 150 && !finishNode; i++) await new Promise(r => setTimeout(r, 20))
   check('server received companion_finish', !!finishNode)
+  check('primary_hello notification was acked', ackedNotification)
   check('hello carried the phone jid', helloJid === '15551234567@s.whatsapp.net', String(helloJid))
   check('companion_finish jid matches', finishNode?.attrs.jid === '15551234567@s.whatsapp.net')
   check('creds marked registered', auth.creds.registered === true)

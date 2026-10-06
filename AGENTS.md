@@ -135,6 +135,15 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   `fetchLatestBaileysVersion()` (lightwa's bundled version) or
   `fetchLatestWaWebVersion()` (live `web.whatsapp.com/sw.js` revision, falling
   back to the bundled version) instead of hardcoding the tuple.
+- The pairing-code flow has two legs. After `companion_hello` the server ACKs
+  with an `<iq type="result">` carrying the pairing `ref`; the second leg is
+  triggered by a **`<notification type="link_code_companion_reg">`** whose child
+  is `<link_code_companion_reg stage="primary_hello">` (sent once the user
+  enters the code on the phone). `handleNode` must route that notification by
+  `attrs.type`, not by the root tag — routing only on the root tag means the
+  companion never sends `companion_finish`, so the server never emits
+  `pair-success` and the session is never saved. Notifications without the
+  pairing payload must still be acked and ignored.
 - `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
   emits an async error when a still-connecting socket is closed, which would
   otherwise crash the host with an unhandled `'error'` event.

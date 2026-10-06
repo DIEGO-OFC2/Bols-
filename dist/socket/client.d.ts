@@ -201,6 +201,13 @@ export declare class WAClient {
     private handleNode;
     private handlePairDevice;
     private handleCompanionReg;
+    /**
+     * Handle the phone's `primary_hello` notification: answer with
+     * `companion_finish`, then ack. The server replies to the finish IQ and later
+     * emits `pair-success`. Notifications that arrive without the pairing payload
+     * are acked and ignored.
+     */
+    private handleCompanionRegNotification;
     private handlePairSuccess;
     private handleSuccess;
     private buildGroupMetadata;
