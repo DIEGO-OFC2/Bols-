@@ -1,5 +1,6 @@
 import { Boom } from '@hapi/boom'
 import { createHash } from 'crypto'
+import { once } from 'events'
 import { createWriteStream, promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -254,8 +255,15 @@ export const uploadingNecessaryImages = async (
 			try {
 				for await (const block of stream) {
 					hasher.update(block)
-					encFileWriteStream.write(block)
+					if (!encFileWriteStream.write(block)) {
+						await once(encFileWriteStream, 'drain')
+					}
 				}
+
+				// Wait for the write buffer to flush before handing the path to the
+				// uploader, otherwise it can read a truncated file.
+				encFileWriteStream.end()
+				await once(encFileWriteStream, 'finish')
 
 				const sha = hasher.digest('base64')
 
@@ -267,7 +275,8 @@ export const uploadingNecessaryImages = async (
 
 				return { url: getUrlFromDirectPath(directPath) }
 			} finally {
-				encFileWriteStream.end()
+				stream.destroy()
+				encFileWriteStream.destroy()
 				await fs.unlink(filePath).catch(err => logger?.debug({ err, filePath }, 'failed to delete temp upload file'))
 			}
 		})
