@@ -144,6 +144,16 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   companion never sends `companion_finish`, so the server never emits
   `pair-success` and the session is never saved. Notifications without the
   pairing payload must still be acked and ignored.
+- Inbound `key.fromMe`/`key.remoteJid` must be derived the way Baileys'
+  `decodeMessageNode` does, not hardcoded. A companion-routed self message
+  arrives as `<message from="<me>:<dev>" recipient="<chat>">` and a group
+  self-echo carries our own `participant`; hosts like the V3 bot default to
+  private mode and drop every event whose `key.fromMe` is false, so a
+  hardcoded `fromMe: false` silently swallows all owner commands. Use
+  `recipient` as the chat when present and compare `from`/`participant` to
+  `creds.me.id` **and** `creds.me.lid` with `areJidsSameUser`. `test/receive-test.ts`
+  covers 1:1 peer, self-echo, and group echo. Acks must target the stanza's
+  `from`, not the chat.
 - `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
   emits an async error when a still-connecting socket is closed, which would
   otherwise crash the host with an unhandled `'error'` event.

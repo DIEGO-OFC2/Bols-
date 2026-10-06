@@ -7,6 +7,7 @@ const suites = [
   'test/crypto-test.ts',
   'test/handshake-test.ts',
   'test/send-test.ts',
+  'test/receive-test.ts',
   'test/pairing-test.ts',
   'test/signal-cross-test.ts',
   'test/group-cross-test.ts',

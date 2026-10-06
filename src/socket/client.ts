@@ -37,7 +37,7 @@ import {
   type MediaType
 } from '../media/index.js'
 import { encodeBigEndian, unixTimestampSeconds } from '../utils/generics.js'
-import { jidDecode, jidNormalizedUser, isJidGroup, isPnUser, isLidUser } from '../wabinary/jid.js'
+import { jidDecode, jidNormalizedUser, isJidGroup, isJidBroadcast, isPnUser, isLidUser, isJidMetaAI, areJidsSameUser } from '../wabinary/jid.js'
 
 export enum DisconnectReason {
   connectionClosed = 428,
@@ -1252,22 +1252,34 @@ export class WAClient {
       const attrs = stanza.attrs
       const from = attrs.from!
       const participant = attrs.participant
-      const authorJid = participant ?? from
+      const recipient = attrs.recipient
       const repo = this.getRepository()
 
+      // A message routed through a companion arrives with `recipient` set to the
+      // chat and `from` set to our own device; group self-echoes carry our own
+      // participant. Mirrors Baileys `decodeMessageNode` so hosts that filter on
+      // `key.fromMe` (e.g. private-mode bots) see our own messages.
+      const me = this.authState.creds.me
+      const meLid = me?.lid
+      const isMe = (jid?: string) => !!jid && (areJidsSameUser(jid, me?.id) || areJidsSameUser(jid, meLid))
+      const remoteJid = recipient && !isJidMetaAI(recipient) ? recipient : from
+      const fromMe = isJidGroup(from) || isJidBroadcast(from) ? isMe(participant) : isMe(from)
+
+      const authorJid = participant ?? from
       const decryptResult = await this.decryptMessageNode(stanza, repo, authorJid)
       if (!decryptResult) return
 
       const message = decodeMessage(decryptResult.plaintext)
       const messageTimestamp = attrs.t ? +attrs.t : Math.floor(Date.now() / 1000)
       const incoming: IncomingMessage = {
-        key: { remoteJid: from, fromMe: false, id: attrs.id!, participant },
+        key: { remoteJid, fromMe, id: attrs.id!, participant },
         message,
-        messageTimestamp
+        messageTimestamp,
+        ...(attrs.notify ? { pushName: attrs.notify } : {})
       }
-      const chat = this.chats.get(from) ?? { id: from }
+      const chat = this.chats.get(remoteJid) ?? { id: remoteJid }
       chat.conversationTimestamp = messageTimestamp
-      this.chats.set(from, chat)
+      this.chats.set(remoteJid, chat)
       this.sentMessages.set(attrs.id!, message)
       if (this.sentMessages.size > 512) {
         const oldest = this.sentMessages.keys().next().value
