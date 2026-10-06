@@ -28,8 +28,9 @@ const encodeBinaryNodeInner = (
 	}
 
 	const pushBytes = (bytes: Uint8Array | Buffer | number[]) => {
-		for (const b of bytes) {
-			buffer.push(b)
+		// index loop avoids the per-call iterator allocation of for..of on typed arrays
+		for (let i = 0; i < bytes.length; i++) {
+			buffer.push(bytes[i]!)
 		}
 	}
 
@@ -223,15 +224,23 @@ const encodeBinaryNodeInner = (
 		throw new Error('Invalid node: tag cannot be undefined')
 	}
 
-	const validAttributes = Object.keys(attrs || {}).filter(k => typeof attrs[k] !== 'undefined' && attrs[k] !== null)
+	const attrKeys = attrs ? Object.keys(attrs) : []
+	let attrCount = 0
+	for (let i = 0; i < attrKeys.length; i++) {
+		if (typeof attrs[attrKeys[i]!] === 'string') {
+			attrCount++
+		}
+	}
 
-	writeListStart(2 * validAttributes.length + 1 + (typeof content !== 'undefined' ? 1 : 0))
+	writeListStart(2 * attrCount + 1 + (typeof content !== 'undefined' ? 1 : 0))
 	writeString(tag)
 
-	for (const key of validAttributes) {
-		if (typeof attrs[key] === 'string') {
+	for (let i = 0; i < attrKeys.length; i++) {
+		const key = attrKeys[i]!
+		const value = attrs[key]
+		if (typeof value === 'string') {
 			writeString(key)
-			writeString(attrs[key])
+			writeString(value)
 		}
 	}
 

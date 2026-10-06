@@ -57,7 +57,6 @@ import {
 	jidEncode,
 	S_WHATSAPP_NET
 } from '../WABinary'
-import { BinaryInfo } from '../WAM/BinaryInfo.js'
 import { USyncQuery, USyncUser } from '../WAUSync/'
 import { WebSocketClient } from './Client'
 import { executeWMexQuery } from './mex.js'
@@ -83,8 +82,6 @@ export const makeSocket = (config: SocketConfig) => {
 		qrTimeout,
 		makeSignalRepository
 	} = config
-
-	const publicWAMBuffer = new BinaryInfo()
 
 	let serverTimeOffsetMs = 0
 
@@ -833,24 +830,6 @@ export const makeSocket = (config: SocketConfig) => {
 		return Buffer.concat([salt, randomIv, ciphered])
 	}
 
-	const sendWAMBuffer = (wamBuffer: Buffer) => {
-		return query({
-			tag: 'iq',
-			attrs: {
-				to: S_WHATSAPP_NET,
-				id: generateMessageTag(),
-				xmlns: 'w:stats'
-			},
-			content: [
-				{
-					tag: 'add',
-					attrs: { t: Math.round(Date.now() / 1000) + '' },
-					content: wamBuffer
-				}
-			]
-		})
-	}
-
 	ws.on('message', onMessageReceived)
 
 	ws.on('open', async () => {
@@ -1178,10 +1157,8 @@ export const makeSocket = (config: SocketConfig) => {
 		requestPairingCode,
 		updateServerTimeOffset,
 		sendUnifiedSession,
-		wamBuffer: publicWAMBuffer,
 		/** Waits for the connection to WA to reach a state */
 		waitForConnectionUpdate: bindWaitForConnectionUpdate(ev),
-		sendWAMBuffer,
 		executeUSyncQuery,
 		onWhatsApp,
 		fetchAccountReachoutTimelock,
