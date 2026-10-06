@@ -3,3 +3,4 @@ node_modules/
 .agent_tmp/
 # Platform-specific native build output; built from native/hkdf.c on install.
 native/*.node
+lightwa-*.tgz
