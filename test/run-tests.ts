@@ -20,7 +20,8 @@ const suites = [
   'test/native-crypto-test.ts',
   'test/repository-test.ts',
   'test/session-addressing-test.ts',
-  'test/lid-session-transition-test.ts'
+  'test/lid-session-transition-test.ts',
+  'test/send-to-lid-test.ts'
 ]
 
 let failed = 0

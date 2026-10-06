@@ -161,6 +161,20 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   an opaque LID; hosts (e.g. V3's `realJid`) resolve the phone-number form
   through these fields and silently mis-handle admin/owner checks and replies
   when they are absent. `test/lid-addressing-test.ts` guards this.
+- Signal sessions must stay reachable across PN/LID addressing forms. The
+  server may address a peer by LID while its session was opened against the
+  phone number (or vice versa), and the session keys differ: `address(LID)` is
+  `<user>_1.<device>` but `resolveWireId` used to redirect a PN key to
+  `<user>.<device>` — so a PN-keyed session went invisible the moment a LID
+  mapping existed. Keep the single `jidToSignalAddress` helper, the
+  `loadSession` counterpart fallback, and the receive-path resolution
+  (`decryptMessageNode` resolves PN→LID and learns the mapping from the
+  envelope via `storeLIDPNMappings` + `migrateSession`), mirroring Baileys'
+  `getDecryptionJid`/`storeMappingFromEnvelope`. A mismatch is silent: the
+  message fails to decrypt and is dropped, which reads as "connected and
+  active but never responds". `test/session-addressing-test.ts`,
+  `test/lid-session-transition-test.ts` and `test/send-to-lid-test.ts` guard
+  the receive, transition and reply paths respectively.
 - The login payload goes out with `passive: true`; the server then holds back
   the message stream. Baileys flips to active with
   `<iq to="s.whatsapp.net" xmlns="passive" type="set"><active/></iq>` right
