@@ -609,10 +609,10 @@ export class WAClient {
     try {
       const reg = getBinaryNodeChild(node, 'link_code_companion_reg')
       const hasPayload =
-        reg?.attrs.stage === 'primary_hello' &&
-        getBinaryNodeChild(reg, 'link_code_pairing_ref') &&
-        getBinaryNodeChild(reg, 'primary_identity_pub') &&
-        getBinaryNodeChild(reg, 'link_code_pairing_wrapped_primary_ephemeral_pub')
+        !!reg &&
+        !!getBinaryNodeChild(reg, 'link_code_pairing_ref') &&
+        !!getBinaryNodeChild(reg, 'primary_identity_pub') &&
+        !!getBinaryNodeChild(reg, 'link_code_pairing_wrapped_primary_ephemeral_pub')
       if (hasPayload) await this.handleCompanionReg(reg!)
     } finally {
       if (from && id) {

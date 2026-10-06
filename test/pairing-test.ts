@@ -126,7 +126,8 @@ const runE2E = async () => {
   const primaryIdentity = Curve.generateKeyPair()
   let helloJid: string | undefined
   let finishNode: any
-  let ackedNotification = false
+  let ackedNotification = 0
+  let clientClosed = false
 
   const buildWrapped = async (code: string) => {
     const salt = randomBytes(32)
@@ -137,7 +138,7 @@ const runE2E = async () => {
 
   ctx.onNode = async (node: any, send: (node: any) => void) => {
     if (node.tag === 'ack') {
-      if (node.attrs.type === 'link_code_companion_reg') ackedNotification = true
+      if (node.attrs.type === 'link_code_companion_reg') ackedNotification++
       return
     }
     if (node.tag !== 'iq') return
@@ -162,6 +163,13 @@ const runE2E = async () => {
       // Once the user enters the code the phone sends a `primary_hello`
       // notification carrying the primary identity + wrapped ephemeral key.
       setTimeout(() => {
+        // Server quirk: a payload-less companion_reg notification must be acked
+        // and ignored, not end the socket.
+        send({
+          tag: 'notification',
+          attrs: { from: '15550000000@s.whatsapp.net', id: 'ntf-0', type: 'link_code_companion_reg' },
+          content: [{ tag: 'link_code_companion_reg', attrs: { stage: 'primary_hello' }, content: [] }]
+        })
         send({
           tag: 'notification',
           attrs: { from: '15550000000@s.whatsapp.net', id: 'ntf-1', type: 'link_code_companion_reg' },
@@ -194,6 +202,7 @@ const runE2E = async () => {
     noiseCertSerial: 0
   })
   client.connect()
+  client.ev.on('connection.update', (u: any) => { if (u.connection === 'close') clientClosed = true })
 
   const code = await client.requestPairingCode('15551234567')
   check('pairing code is 8 crockford chars', /^[0-9A-HJKMNP-TV-Z]{8}$/.test(code), code)
@@ -201,7 +210,8 @@ const runE2E = async () => {
   // The server answers asynchronously; wait for companion_finish to land.
   for (let i = 0; i < 150 && !finishNode; i++) await new Promise(r => setTimeout(r, 20))
   check('server received companion_finish', !!finishNode)
-  check('primary_hello notification was acked', ackedNotification)
+  check('both companion_reg notifications acked', ackedNotification === 2, String(ackedNotification))
+  check('payload-less notification did not close the socket', !clientClosed)
   check('hello carried the phone jid', helloJid === '15551234567@s.whatsapp.net', String(helloJid))
   check('companion_finish jid matches', finishNode?.attrs.jid === '15551234567@s.whatsapp.net')
   check('creds marked registered', auth.creds.registered === true)
