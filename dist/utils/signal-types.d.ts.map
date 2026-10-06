@@ -1,1 +1,0 @@
-{"version":3,"file":"signal-types.d.ts","sourceRoot":"","sources":["../../src/utils/signal-types.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,OAAO,EAAE,aAAa,EAAE,MAAM,oBAAoB,CAAA;AAEhE,qEAAqE;AACrE,MAAM,WAAW,WAAW;IAC1B,cAAc,EAAE,MAAM,CAAA;IACtB,YAAY,EAAE,aAAa,CAAA;IAC3B,iBAAiB,EAAE,OAAO,CAAA;CAC3B"}

@@ -1,1 +1,0 @@
-{"version":3,"file":"tokens.d.ts","sourceRoot":"","sources":["../../src/wabinary/tokens.ts"],"names":[],"mappings":"AACA,eAAO,MAAM,kBAAkB,EAAE,MAAM,EAAE,EAqLxC,CAAA;AAED,eAAO,MAAM,kBAAkB,EAAE,MAAM,EAyCtC,CAAA;AAED,eAAO,MAAM,SAAS,EAAE,MAAM,CAAC,MAAM,EAAE;IAAE,KAAK,EAAE,MAAM,CAAC;IAAC,IAAI,CAAC,EAAE,MAAM,CAAA;CAAE,CAgBnE,CAAA"}

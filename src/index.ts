@@ -1,59 +1,13 @@
-export { WAClient, DisconnectReason } from './socket/client.js'
-export type {
-  SocketConfig,
-  ConnectionUpdate,
-  Logger,
-  IncomingMessage,
-  WAMessage,
-  SendMessageOptions,
-  Contact,
-  Chat,
-  GroupMetadata,
-  GroupParticipant,
-  GroupParticipantsUpdate,
-  GroupParticipantAction
-} from './socket/client.js'
-export { NoiseHandler, NOISE_MODE, NOISE_WA_HEADER } from './socket/noise-handler.js'
-export { Curve, generateSignalPubKey, signedKeyPair, hkdf, sha256, md5 } from './crypto/index.js'
-export { hasNativeCrypto } from './crypto/native.js'
-export type { KeyPair, SignedKeyPair } from './crypto/index.js'
-export { initAuthState, initAuthCreds, makeInMemoryKeyStore } from './utils/auth-utils.js'
-export type { AuthenticationState, AuthenticationCreds, SignalKeyStore } from './utils/auth-utils.js'
-export { Browsers } from './utils/browser-utils.js'
-export type { BrowserDescription } from './utils/browser-utils.js'
-export { encodeBinaryNode, decodeBinaryNode } from './wabinary/index.js'
-export type { BinaryNode } from './wabinary/types.js'
-export { encodeMessage, decodeMessage, getContentType, normalizeMessageContent } from './proto/message.js'
-export type { IMessage, MediaMessage, ContextInfo } from './proto/message.js'
-export { encryptMedia, decryptMedia, getMediaKeys, MEDIA_PATH_MAP } from './media/index.js'
-export type { MediaType, MediaConnInfo } from './media/index.js'
-export { SignalRepository } from './signal/repository.js'
-export { buildUSyncDeviceQuery, parseUSyncDeviceResult, extractDeviceJids, deviceJid } from './usync/index.js'
-export {
-  makeWASocket,
-  useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
-  fetchLatestBaileysVersion,
-  fetchLatestWaWebVersion,
-  DEFAULT_WA_VERSION,
-  generateWAMessage,
-  generateWAMessageContent,
-  generateWAMessageFromContent,
-  prepareWAMessageMedia,
-  downloadContentFromMessage,
-  downloadMediaMessage,
-  proto,
-  isJidUser,
-  areJidsSameUser,
-  getDevice,
-  extractMessageContent,
-  getUrlInfo,
-  delay,
-  WAMessageStubType,
-  WAMessageStatus
-} from './compat/baileys.js'
-export { Browsers as BaileysBrowsers, delay as baileysDelay } from './compat/baileys.js'
-export type { BaileysSocketConfig, WAMessage as BaileysWAMessage, PreparedMedia } from './compat/baileys.js'
-export { jidNormalizedUser, jidEncode, jidDecode, isJidGroup, isJidBroadcast } from './wabinary/jid.js'
+import makeWASocket from './Socket/index'
 
-export { makeWASocket as default } from './compat/baileys.js'
+export * from '../WAProto/index.js'
+export * from './Utils/index'
+export * from './Types/index'
+export * from './Defaults/index'
+export * from './WABinary/index'
+export * from './WAM/index'
+export * from './WAUSync/index'
+
+export type WASocket = ReturnType<typeof makeWASocket>
+export { makeWASocket }
+export default makeWASocket

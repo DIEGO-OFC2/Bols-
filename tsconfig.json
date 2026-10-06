@@ -1,22 +1,39 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "lib": ["ES2023"],
-    "outDir": "dist",
-    "rootDir": "src",
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "outDir": "lib",
     "declaration": true,
-    "declarationMap": true,
     "sourceMap": true,
+    "declarationMap": true,
+    "moduleDetection": "force",
+
+    "lib": ["ES2020", "ESNext.Array", "DOM"],
+    "rootDir": "./src",
+
+    // ESM Features
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    // Type Safety
     "strict": true,
-    "exactOptionalPropertyTypes": false,
-    "noUncheckedIndexedAccess": false,
-    "noImplicitOverride": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitThis": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true
+    "skipLibCheck": true,
+
+    // Interop
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+
+    // DX Boosters
+    "allowJs": false,
+    "checkJs": false,
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules"]
 }

@@ -1,238 +1,303 @@
 # AGENTS.md
 
-`lightwa` is a from-scratch, memory-frugal WhatsApp Web protocol client in
-TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
-(`/tmp/wa-test/Baileys`, rc14) for the linking handshake.
+Guide for AI coding agents (Claude Code, Cursor, Aider, Codex, Copilot Workspace, etc.) contributing to Baileys. Human contributors should also read this — there's nothing AI-specific in the conventions, only in the disclosure rules at the end.
 
-## Layout
+If you are an AI agent driving this repo, read this file first, then `CODE_OF_CONDUCT.md` (specifically the AI policy section), then `SECURITY.md`.
 
-- `src/wabinary/` — binary node codec. `tokens.ts` holds the wire token
-  dictionaries; `encode.ts`/`decode.ts` are the codec; `constants.ts` has TAGS.
-- `src/socket/` — `noise-handler.ts` (Noise_XX handshake) and `client.ts`
-  (wire lifecycle: connect, keep-alive, node routing, QR + pairing code).
-- `src/crypto/` — Curve (native X25519 keygen/shared secret via OpenSSL,
-  XEdDSA via @noble/curves), HKDF, AES-GCM/CTR. `native.ts` loads the optional
-  C accelerator with a JS fallback.
-- `native/` — `hkdf.c`, the optional N-API addon (SHA-256 / HMAC / HKDF). Built
-  by `scripts/build-native.mjs` into `native/lightwa_crypto.node` (gitignored).
-- `src/signal/` — `session.ts` (Double Ratchet, SessionBuilder/Cipher/Record),
-  `group.ts` (sender keys), `repository.ts` (binds sessions to the key store),
-  `lid-mapping.ts`.
-- `src/proto/` — hand-rolled protobuf readers/writers. `bytes.ts` holds the
-  fast growable-buffer primitives used on the message hot path; `writer.ts` is
-  the older generic codec still used by `client-payload.ts`/`handshake.ts`.
-  `message.ts` is the `Message` codec.
-- `src/media/` — HKDF media keys, AES-CBC encrypt/decrypt, `node:https` upload.
-- `src/usync/` — device-list query build/parse and device-JID extraction.
-- `src/utils/` — auth state, connection validation, generic helpers.
-- `test/` — integration harnesses, run by `npm test`.
-- `example/memory-profile.ts` — heap-plateau probe (`npm run profile`).
-- `bench/compare.mjs` — head-to-head microbenchmark vs baileys (`npm run bench`).
+## What Baileys is
 
-## Commands
+A TypeScript WebSocket client for the WhatsApp Web protocol. No browser, no Selenium — it speaks the binary Noise/protobuf protocol directly. Used by thousands of downstream projects, so changes to public APIs and wire-level handling have wide blast radius.
 
-- `npm run typecheck` — tsc, no emit.
-- `npm run build:native` — compiles `native/hkdf.c` to a `.node` addon. Optional;
-  exits 0 with a note if no compiler / Node headers are found.
-- `npm test` — runs `test/run-tests.ts`, which spawns every `test/*-test.ts`.
-- `npm run example` — live connect; prints QR and RSS/heap. Needs outbound
-  network to web.whatsapp.com.
-- `npm run profile` — 20k ratchet-cycle heap probe; expects a plateau
-  (`node --expose-gc`).
-- `npm run bench` — microbenchmark vs baileys; needs `baileys` (dev dep).
+The library is **dual-use**: legitimate automation, bots, and integrations on one side; spam, stalkerware, and ToS-breaking automation on the other. We do not accept contributions whose primary purpose is to enable abuse (mass messaging, evasion of WhatsApp's anti-spam, scraping users without consent). See `CODE_OF_CONDUCT.md`.
 
-## Invariants and gotchas
+## Repository layout
 
-- Token dictionary ordering is wire-critical. `SINGLE_BYTE_TOKENS` must match
-  the reference exactly. Do not hand-edit `src/wabinary/tokens.ts`; regenerate
-  it from `constants.ts` of the reference checkout. The original hand-written
-  table had drifted and broke real-server interop.
-- `decodeBinaryNode` expects the full frame including the leading
-  compression/dictionary flag byte. Codec cross-checks must pass the reference
-  bytes unstripped.
-- Noise: `client.ts` must pass a freshly generated `ephemeralKeyPair` into
-  `NoiseHandler`. Reusing the static noise key pair makes ECDH secrets diverge.
-- Frame advance uses `subarray` to avoid copying socket buffers.
-- Live server behavior matches rc14, not the published npm `baileys` build —
-  prefer the source checkout when cross-validating.
-- Interop suites load `baileys`/`libsignal` from `node_modules` (installed as
-  dev deps) or a `/tmp` checkout, and print `SKIP` when neither exists. The npm
-  `baileys` build is ESM with an import-only export map and pulls a Rust WASM
-  bridge for `getMediaKeys`; load those subpaths with dynamic `import`, not
-  `require`, and skip if the native bridge is unavailable.
-- Prefer native `crypto` over JS where it is byte-identical: X25519 keygen and
-  shared secrets use OpenSSL (`generateKeyPairSync('x25519')` and
-  `diffieHellman`); media keys and HKDF use `@noble/hashes` `hkdf` (byte-
-  identical to `crypto.hkdfSync` but ~1.8x faster). XEdDSA has no native
-  equivalent, so it stays on @noble/curves.
-- `hmacSign`/`sha256` route through the optional native addon when present
-  (~2x `node:crypto` for the short inputs the Signal ratchet uses), falling back
-  to `node:crypto`. The ratchet's per-step chain HMACs, the `deriveSecrets`
-  scratch buffer and the fixed info/zero constants in `signal/session.ts` exist
-  to keep the per-message path allocation-light — keep them in place, and keep
-  `signal/group.ts` importing the shared constants instead of re-allocating.
-  Verify any ratchet change with `test/signal-cross-test.ts` and `npm run bench`.
-- The message hot path must stay allocation-light: use the `ByteWriter` /
-  `ByteReader` from `proto/bytes.ts` (growable buffer, pooled nested writers,
-  zero-copy `subarray` reads) rather than the generic `ProtoWriter`/`ProtoReader`,
-  which allocates a `Buffer` per varint byte. Verify any codec change with
-  `test/message-cross-test.ts` (byte-identical to WAProto) and `npm run bench`.
-- `ByteReader` must stay faithful to protobuf wire semantics on *unknown* fields,
-  because real messages carry fields the hand-rolled codec does not model. Two
-  traps that desynced the reader and threw `unsupported proto wire type N`:
-  `skip(WIRE_BYTES)` must read the length into a local before advancing
-  (`this.pos += this.varint()` uses the pre-read position, off by one per skipped
-  field), and `varint()` must consume *every* continuation byte (64-bit
-  timestamps like `timestampMs` span six bytes; the old shift loop stopped at
-  five). Both were caught live, not by round-trip tests — the interop suite only
-  re-encodes fields lightwa itself models, so it never exercised `skip`. Prefer
-  hand-crafted wire bytes (or a real captured payload) when testing the reader.
-- Signal payloads are padded, not raw protobuf. WhatsApp clients run the encoded
-  `Message` through `writeRandomPadMax16` (PKCS#7-style, random length 1..16)
-  before Signal encryption and `unpadRandomMax16` after decryption; the padding
-  is what a peer's libsignal `getPadding` expects. lightwa did neither, so a real
-  peer's padded message went straight into `decodeMessage` and threw
-  `unsupported proto wire type 6`, which surfaced as "session active but the bot
-  never answers". The pad is applied to the *outer* payload in
-  `sendBuiltMessage` (the device-sent copy carries an *unpadded* inner
-  `message`, matching Baileys) and stripped in `decryptMessageNode` before
-  decode — `unpadRandomMax16` returns the unpadded buffer, so the receive path
-  must return *that*, not the raw plaintext. lightwa delivers the sender-key
-  distribution as its own Signal message, so it carries the same padding;
-  `test/message-padding-test.ts` covers every pad length inbound and the padded
-  outbound stanza, and `test/receive-test.ts` covers a padded SKDM over the wire.
-- The native addon is strictly optional and must never be a hard dependency.
-  `src/crypto/native.ts` returns `null` on any failure (missing binary, bad ABI,
-  no `dlopen`) and every call site must fall back to `@noble/hashes`. The addon
-  itself `dlopen`s `libcrypto` for SHA-NI and silently uses its bundled C SHA-256
-  if unavailable. Never link OpenSSL at build time — the addon must stay
-  dependency-free so `npm run build:native` works on a bare toolchain.
-  `test/native-crypto-test.ts` cross-checks every primitive against OpenSSL and
-  skips cleanly when the addon is not built.
-- `Curve.verify` strips a leading `0x05` Signal type byte from 33-byte public
-  keys. Callers pass either form; missing this made every group sender-key
-  signature fail.
-- `Curve.verify` has a native OpenSSL fast path: XEdDSA signatures are Ed25519
-  signatures over the key's Montgomery→Edwards form with the key sign bit packed
-  into the top bit of `s`. `verify` derives that form and re-parses it into a
-  `KeyObject` once per key (both are ~30µs, key-only operations) and caches the
-  result in a bounded `edwardsKeyCache` (512 entries, evict-oldest); the per
-  message cost is then a single `cryptoVerify` with the **full 64-byte** `R || s`
-  (passing only the 32-byte `s` silently fails every time). The noble scalar path
-  is the fallback when the key fails to parse. This is ~9k ops/s and dominates
-  the group-decrypt hot path — do not reintroduce a per-message key parse.
-- Group decrypt advances the sender chain lazily via `getSenderKeySeed`, which
-  retains skipped message keys for out-of-order delivery. That list is capped at
-  `MAX_MESSAGE_KEYS` on every advance — remove the cap and a peer that keeps
-  jumping the counter forward grows the list unbounded.
-- Signal group cipher stepping must mirror libsignal exactly: when encrypting,
-  the iteration used is `chainIteration === 0 ? 0 : chainIteration + 1`, and the
-  chain advances to that iteration before deriving the message key.
-- The `Message` protobuf is hand-coded per media type because field numbers
-  differ between image/video/audio/document/sticker (see `src/proto/message.ts`
-  `MEDIA_FIELDS`). Verify against `WAProto/WAProto.proto` before editing.
-- Auth creds must carry `nextPreKeyId` and `firstUnuploadedPreKeyId`; they are
-  persisted alongside pre-keys so an upload can resume after a restart.
-- The protobuf writer skips `undefined` values, so optional fields can be passed
-  without branching — but nested writers must not be constructed from undefined
-  (guard first).
-- `src/compat/baileys.ts` is the drop-in layer for hosts that `require("baileys")`
-  / `await import("baileys")` (e.g. the V3 bot). The default export is
-  `makeWASocket`; it re-exports the helpers V3 destructures (`useMultiFileAuthState`,
-  `makeCacheableSignalKeyStore`, `generateWAMessage*`, `prepareWAMessageMedia`,
-  `downloadContentFromMessage`, `Browsers`, `DisconnectReason`, `delay`, ...).
-  When broadening the public surface, keep this file and `src/index.ts` in sync.
-- `SocketConfig.browser` accepts the Baileys tuple form `[os, browser, version]`;
-  the compat layer passes it through unchanged.
-- `makeWASocket` opens the websocket itself (like Baileys); hosts never call
-  `WAClient.connect()`. `connect()` builds the `NoiseHandler` but the transport
-  keys only exist after the handshake, so `requestPairingCode` awaits the
-  `transportReady` gate (resolved right after `noise.finishInit`, rejected in
-  `end()`). Skipping that wait is what produced `noise not initialised`.
-- The WhatsApp web version is wire-critical: the middle field is thousands, so
-  `[2, 3000, 1043857760]`, never `[2, 300, ...]`. An out-of-date version makes
-  the server answer `<failure reason="405">` right after `clientHello`, before
-  the handshake — which surfaces as `Connection Closed` / `noise not
-  initialised`. `DEFAULT_WA_VERSION` (exported from `socket/client.ts`, where
-  the socket default also reads it) is the single source of truth; the compat
-  layer re-exports it rather than keeping its own copy. Hosts should use
-  `fetchLatestBaileysVersion()` (lightwa's bundled version) or
-  `fetchLatestWaWebVersion()` (live `web.whatsapp.com/sw.js` revision, falling
-  back to the bundled version) instead of hardcoding the tuple.
-- The pairing-code flow has two legs. After `companion_hello` the server ACKs
-  with an `<iq type="result">` carrying the pairing `ref`; the second leg is
-  triggered by a **`<notification type="link_code_companion_reg">`** whose child
-  is `<link_code_companion_reg stage="primary_hello">` (sent once the user
-  enters the code on the phone). `handleNode` must route that notification by
-  `attrs.type`, not by the root tag — routing only on the root tag means the
-  companion never sends `companion_finish`, so the server never emits
-  `pair-success` and the session is never saved. Notifications without the
-  pairing payload must still be acked and ignored.
-- Inbound `key.fromMe`/`key.remoteJid` must be derived the way Baileys'
-  `decodeMessageNode` does, not hardcoded. A companion-routed self message
-  arrives as `<message from="<me>:<dev>" recipient="<chat>">` and a group
-  self-echo carries our own `participant`; hosts like the V3 bot default to
-  private mode and drop every event whose `key.fromMe` is false, so a
-  hardcoded `fromMe: false` silently swallows all owner commands. Use
-  `recipient` as the chat when present and compare `from`/`participant` to
-  `creds.me.id` **and**   `creds.me.lid` with `areJidsSameUser`. `test/receive-test.ts`
-  covers 1:1 peer, self-echo, and group echo. Acks must target the stanza's
-  `from`, not the chat.
-- Inbound keys must also carry the alternate addressing fields Baileys exposes
-  (`remoteJidAlt`/`remoteJidUsername` on 1:1, `participantAlt`/`participantUsername`
-  on groups), derived from `sender_pn`/`sender_lid`/`recipient_pn`/`recipient_lid`
-  via `extractAddressingContext`. WhatsApp addresses a growing share of chats by
-  an opaque LID; hosts (e.g. V3's `realJid`) resolve the phone-number form
-  through these fields and silently mis-handle admin/owner checks and replies
-  when they are absent. `test/lid-addressing-test.ts` guards this.
-- Signal sessions must stay reachable across PN/LID addressing forms. The
-  server may address a peer by LID while its session was opened against the
-  phone number (or vice versa), and the session keys differ: `address(LID)` is
-  `<user>_1.<device>` but `resolveWireId` used to redirect a PN key to
-  `<user>.<device>` — so a PN-keyed session went invisible the moment a LID
-  mapping existed. Keep the single `jidToSignalAddress` helper, the
-  `loadSession` counterpart fallback, and the receive-path resolution
-  (`decryptMessageNode` resolves PN→LID and learns the mapping from the
-  envelope via `storeLIDPNMappings` + `migrateSession`), mirroring Baileys'
-  `getDecryptionJid`/`storeMappingFromEnvelope`. A mismatch is silent: the
-  message fails to decrypt and is dropped, which reads as "connected and
-  active but never responds". `test/session-addressing-test.ts`,
-  `test/lid-session-transition-test.ts` and `test/send-to-lid-test.ts` guard
-  the receive, transition and reply paths respectively.
-- The login payload goes out with `passive: true`; the server then holds back
-  the message stream. Baileys flips to active with
-  `<iq to="s.whatsapp.net" xmlns="passive" type="set"><active/></iq>` right
-  after `success`. Without it the socket stays connected (and reconnects on
-  restart) but silently stops receiving messages — the "connects, saves, then
-  goes stale" symptom. Likewise, `<ib><offline_preview/></ib>` must be answered
-  with `<ib><offline_batch count="100"/></ib>` or the queued/offline messages
-  are never pushed, and `<ib><downgrade_webclient/></ib>` must end the socket
-  with `multideviceMismatch`. `<ib><edge_routing>` persists `routing_info`.
-  `test/lifecycle-test.ts` guards all of this.
-- One-time pre-keys must be *uploaded*, not just generated: after `success` the
-  client queries `<iq type="get" xmlns="encrypt"><count/></iq>` and uploads an
-  initial batch (812, then 5 when low) with
-  `<iq type="set" xmlns="encrypt">`. The server also asks for more via a
-  `<notification type="encrypt"><count value=..>` stanza — *not* an encrypt IQ
-  as the name suggests — which must be answered and acked. With no pre-keys on
-  the server, peers cannot open a Signal session to us, so the socket connects,
-  saves, and then receives nothing. `uploadPreKeys` de-dupes concurrent
-  uploads; the batch size lives in `MIN_PREKEY_COUNT`/`INITIAL_PREKEY_COUNT`.
-- `end()` installs a no-op `ws.on('error')` after `removeAllListeners()`: `ws`
-  emits an async error when a still-connecting socket is closed, which would
-  otherwise crash the host with an unhandled `'error'` event.
-- Generic USync lives in `src/usync/index.ts`: `buildUSyncQuery`/`parseUSyncResult`
-  plus `WAClient.executeUSyncQuery(protocols, users)`. `onWhatsApp` (contact
-  protocol) and `fetchStatus` (status protocol) are built on it; the send path
-  uses the device/lid-specific `buildUSyncDeviceQuery` instead.
-- `WAClient` exposes the full Baileys v7 socket surface V3 consumes, including
-  `sendAlbum`, `sendReact`, `logout`, `onWhatsApp`, `presenceSubscribe`,
-  `readMessages`, `sendReceipts`, `updateProfileName`, `updateProfileStatus`,
-  `fetchPrivacySettings`, `fetchStatus`, `getBusinessProfile`. `test/compat-test.ts`
-  asserts these exist; extend that list when adding methods.
+```
+src/
+  Socket/          High-level socket — chats, groups, messages send/recv, newsletter, USync
+  Signal/          Signal Protocol session/sender-key wrapping over libsignal-node
+  Utils/           Decoding, media, auth state, retry, app-state sync, generics
+  Types/           Public TypeScript types — touching these is a public-API change
+  WABinary/        Binary node encoding/decoding
+  WAUSync/         USync query protocols
+  Defaults/        Constants (WA Web version, baileys version, default config)
+  __tests__/       Jest unit + integration tests; e2e tests live in __tests__/e2e
+WAProto/           Generated protobuf bindings — DO NOT hand-edit
+Example/           Reference implementation in example.ts
+proto-extract/     Tooling to refresh protobufs from WA Web
+scripts/           Repo automation (version bumps, etc.)
+.github/workflows/ CI — lint, test, e2e, build, release
+```
 
-## Tests
+`WAProto/index.js`, `WAProto/index.d.ts` are generated by `WAProto/GenerateStatics.sh`. If a change requires modifying them, regenerate via `npm run gen:protobuf` rather than editing by hand.
 
-Each harness prints `N/M ... passed` and sets `process.exitCode` on failure.
-`npm test` aggregates them. When adding a suite, append it to the `suites`
-array in `test/run-tests.ts`.
+## Setup
+
+This repo requires **Yarn 4** via Corepack. Yarn 1 / classic will fail noisily on `package.json` resolutions.
+
+```bash
+corepack enable
+yarn install
+```
+
+Node ≥ 20 (enforced by `engines` and `preinstall`).
+
+## Daily commands
+
+| Task | Command |
+|---|---|
+| Install | `yarn install` |
+| Build (lib + types) | `yarn build` |
+| Type-check + lint | `yarn lint` |
+| Auto-fix lint + format | `yarn lint:fix` |
+| Format only | `yarn format` |
+| Unit + integration tests | `yarn test` |
+| End-to-end tests | `yarn test:e2e` (requires the bartender mock server, see below) |
+| Run the example | `yarn example` |
+| Regenerate protobufs | `yarn gen:protobuf` |
+| Audit deps | `yarn npm audit --recursive` |
+
+`yarn lint` runs `tsc` first, then ESLint. A green lint means no type errors.
+
+## Code style
+
+- **TypeScript strict** — `strict`, `strictNullChecks`, `noUncheckedIndexedAccess`, `verbatimModuleSyntax` are all on. Don't disable them locally.
+- **Tabs** for indentation, single quotes, no semicolons (Prettier-enforced).
+- **No `any` in new code.** Existing `any`s in tests are tolerated as warnings, not invitations.
+- **No comments that restate the code.** Comment the *why* — protocol quirks, WhatsApp-side behavior, non-obvious workarounds. Don't comment-narrate "// loop over messages".
+- **No emojis in code or commit messages** unless the user explicitly asks.
+- **Named exports** preferred. Default exports only where they already exist (e.g., `makeWASocket`).
+- **Errors**: throw `Boom` (`@hapi/boom`) for protocol/HTTP-style errors so downstream code can branch on `.output.statusCode`. Plain `Error` for everything else.
+- **Logging**: every code path that crosses an async boundary should accept a `logger: ILogger` (pino-compatible). Don't `console.log`.
+
+## Idiomatic patterns
+
+These are the patterns the existing code uses. Match them. New code that does the same thing differently will get review comments asking you to align.
+
+### Errors — Boom with statusCode
+
+```ts
+import { Boom } from '@hapi/boom'
+
+if (!sock.user) {
+  throw new Boom('Not authenticated', { statusCode: 401 })
+}
+
+if (!isJidUser(jid)) {
+  throw new Boom(`Invalid jid: ${jid}`, { statusCode: 400 })
+}
+```
+
+Downstream code branches on `error.output.statusCode` to retry, log out, or surface to the user. Plain `throw new Error(...)` loses that signal. Reserve plain `Error` for genuinely internal invariants where no caller is expected to recover.
+
+### Logging — structured, never positional
+
+```ts
+// good: object first, message last; reads cleanly in JSON logs
+logger.warn({ msgId: attrs.id, from: attrs.from }, 'error 463: account restricted')
+logger.debug({ messageKey }, 'already requested resend')
+logger.error({ err: error, opName }, 'failed to parse mex notification JSON')
+
+// bad: string interpolation, untyped fields
+logger.warn(`error 463 from ${attrs.from}`)
+console.log('failed:', error)
+```
+
+Pino convention: errors go under `err`, not `error` or `e`. The structured object is the *first* argument so log processors can index it.
+
+### JIDs — always go through the helpers
+
+```ts
+import { jidDecode, jidNormalizedUser, areJidsSameUser, isJidUser } from '../WABinary'
+
+const decoded = jidDecode(rawJid)            // { user, server, device?, agent? } | undefined
+const normalized = jidNormalizedUser(rawJid) // strips device/agent, lowercases
+const same = areJidsSameUser(a, b)           // compare user portions only
+```
+
+Never split a JID with `.split('@')` or compare with `===`. JIDs carry device suffixes (`:0`, `:42`), agent fields, and LID/PN duality — string ops will silently miss matches and you'll ship a bug that only fires on multi-device accounts.
+
+### Binary nodes — typed accessors
+
+```ts
+import { getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildString } from '../WABinary'
+
+const groupsNode = getBinaryNodeChild(result, 'groups')
+if (!groupsNode) {
+  throw new Boom('missing <groups> in iq response', { statusCode: 502 })
+}
+
+const groups = getBinaryNodeChildren(groupsNode, 'group') // BinaryNode[]
+const text = getBinaryNodeChildString(node, 'body')        // string | undefined
+const { attrs } = node                                     // typed Record<string, string>
+```
+
+Don't reach into `node.content` as an array directly — types are loose and the shape varies by stanza. The accessors handle the missing/single/array cases.
+
+### Sending IQs — `query` with timeouts
+
+```ts
+const result = await sock.query({
+  tag: 'iq',
+  attrs: { to: S_WHATSAPP_NET, type: 'get', xmlns: 'w:profile:picture' },
+  content: [{ tag: 'picture', attrs: { type: 'image', query: 'url' } }]
+}, /* timeoutMs */ 15_000)
+```
+
+`query` auto-generates the stanza id, attaches a one-shot listener, and rejects on timeout. Don't write your own `sock.ws.send` + manual listener — you'll leak listeners on errors.
+
+### Listening for incoming stanzas — `CB:` prefix
+
+```ts
+sock.ws.on('CB:ib,,dirty', async (node: BinaryNode) => {
+  const { attrs } = getBinaryNodeChild(node, 'dirty')!
+  // ...
+})
+
+sock.ws.on('CB:notification,type:server_sync', handler)
+```
+
+The `CB:tag,attr:value` syntax routes by tag + attribute filter inside the websocket. This is how `messages-recv`, `chats`, `groups` listen — don't filter manually inside a generic `'message'` handler.
+
+### Public events — `ev.on`, never call twice
+
+```ts
+sock.ev.on('messages.upsert', ({ messages, type }) => { ... })
+sock.ev.on('connection.update', ({ connection, lastDisconnect }) => { ... })
+sock.ev.on('creds.update', saveCreds)
+```
+
+`saveCreds` (or any handler) must be deduped — registering twice means writing twice. The harness in `__tests__/e2e/helpers/test-client.ts` shows the cleanup pattern (`ev.off` in teardown).
+
+### Async cleanup — bracket pattern
+
+When you allocate a resource (timer, listener, ws subscription) inside a Promise, clean it up in *both* paths:
+
+```ts
+return new Promise<T>((resolve, reject) => {
+  const timer = setTimeout(() => {
+    cleanup()
+    reject(new Boom('timed out', { statusCode: 408 }))
+  }, timeoutMs)
+
+  const cleanup = () => {
+    clearTimeout(timer)
+    sock.ev.off('event.name', handler)
+  }
+
+  const handler = (data: T) => {
+    if (matches(data)) {
+      cleanup()
+      resolve(data)
+    }
+  }
+
+  sock.ev.on('event.name', handler)
+})
+```
+
+Half-cleanups are how this codebase grew its memory leaks. The bracket pattern (allocate → cleanup defined → both paths call it) is the fix.
+
+### Imports — `verbatimModuleSyntax`
+
+```ts
+import type { WAMessage, WAUrlInfo } from '../Types'
+import { Boom } from '@hapi/boom'
+import { type BinaryNode, getBinaryNodeChild } from '../WABinary'
+```
+
+Type-only imports must be marked `import type` or inline-prefixed `type` — TS strict-mode `verbatimModuleSyntax` will fail the build otherwise. Don't merge a value import with a type import unless you actually use both at runtime.
+
+### Optional chains over null guards
+
+```ts
+// good
+const text = msg.message?.extendedTextMessage?.text ?? msg.message?.conversation
+if (!sent?.key.id) return
+
+// bad — proliferates `if (x && x.y && x.y.z)` ladders
+if (msg.message && msg.message.extendedTextMessage) { ... }
+```
+
+`noUncheckedIndexedAccess` is on, so array/record indexing returns `T | undefined`. Don't paper over it with `!` unless you have an invariant the type system can't see — and if you do, leave a one-line comment explaining the invariant.
+
+### Tests — colocate, name by behavior
+
+```ts
+// src/__tests__/Utils/decode-wa-message.test.ts
+describe('SERVER_ERROR_CODES', () => {
+  it('MessageAccountRestriction is 463', () => {
+    expect(SERVER_ERROR_CODES.MessageAccountRestriction).toBe('463')
+  })
+})
+```
+
+Test files mirror the source path: `src/Foo/bar.ts` → `src/__tests__/Foo/bar.test.ts`. `describe` names the unit, `it` names the behavior in plain English. Avoid `it('works')`.
+
+## Public API discipline
+
+`src/Types/**` and the top-level `src/index.ts` re-exports define the public surface. Treat changes there as breaking unless you can prove additive-only.
+
+For wire-level changes (`Socket/messages-recv.ts`, `Utils/decode-wa-message.ts`, `WABinary/`, etc.) — describe the WhatsApp-side trigger in the PR. Reviewers can't always reproduce protocol behavior, so the description does the heavy lifting.
+
+## Commits and PRs
+
+Conventional commits, scoped where useful:
+
+```
+feat(socket): add support for reachout limits XWAs
+fix(retry): process <keys> bundle and embed SKDM on resend
+chore(deps): bump ajv from 6.12.6 to 6.15.0
+test(e2e): test harness + signal/prekey fixes
+```
+
+PR titles follow the same convention. Squash-merge is the default.
+
+Before opening a PR:
+1. `yarn lint` — must be 0 errors.
+2. `yarn test` — must be all green. If you can't run e2e locally, say so in the PR description.
+3. Don't commit `baileys_auth_info/`, `.env`, `mitm_*.db`, `.superset/`, or any session state. Git is configured to ignore the obvious ones; double-check.
+4. Don't commit regenerated `yarn.lock` from a different package manager. If your `yarn.lock` diff is unexpectedly large (thousands of lines for a one-line `package.json` change), you're using Yarn 1 — switch to Corepack.
+
+## What not to touch without coordination
+
+- **`libsignal` cryptographic flows** — session state, prekeys, sender-key derivation. Subtle bugs here are silent and brick downstream sessions.
+- **`Defaults/baileys-version.json`** — bumped by the `update-version` workflow. Manual edits race with automation.
+- **`WAProto/` generated files** — regenerate, don't hand-edit.
+- **`.github/workflows/`** — CI changes are reviewed separately; bundle them in their own PR when possible.
+- **`package.json` `resolutions`** — these patch known security advisories. Removing entries reintroduces CVEs; check `yarn npm audit --recursive` before pruning.
+
+## Testing expectations
+
+- New public API → unit test in `src/__tests__/`.
+- New protocol path or stanza handler → integration test mocking the binary node, *not* an e2e test (e2e is expensive and flaky in agent loops).
+- New crypto/auth flow → e2e against bartender if feasible, otherwise a deterministic fixture-based unit test.
+
+Tests are colocated by area: `src/__tests__/Socket/`, `src/__tests__/Utils/`, `src/__tests__/binary/`. Match the existing layout.
+
+## Security-sensitive changes
+
+If your change touches:
+- Auth state read/write, key storage, prekey/session lifecycle
+- Message decryption / signature verification
+- Any path that handles user PII (phone numbers, JIDs, message content) in logs or errors
+
+…flag it explicitly in the PR description. See `SECURITY.md` for disclosure of vulnerabilities (do not file them as public issues).
+
+## AI agent etiquette
+
+Beyond the AI policy in `CODE_OF_CONDUCT.md`:
+
+- **Read before you write.** This codebase has subtle protocol invariants. A grep-and-replace agent will make a mess of `Socket/messages-recv.ts`. Read the surrounding handler before editing.
+- **Don't invent WhatsApp protocol details.** If you're not sure how a stanza is structured, find a real example in the tests or in `Utils/decode-wa-message.ts`. Hallucinated XML attributes get merged and then break in production.
+- **Stay in scope.** A bug fix doesn't need a refactor pass. A type tweak doesn't need a comment cleanup PR.
+- **Don't paste auth state into AI tools.** `baileys_auth_info/` contains long-lived Signal keys. Treat it like an SSH private key.
+- **Disclose AI authorship in PRs.** A one-line "drafted with [tool], reviewed by [human]" is enough. See `CODE_OF_CONDUCT.md` § AI Policy for the full rule.
+
+## Where to ask
+
+- Discord: https://discord.gg/WeJM5FP9GG
+- Wiki: https://baileys.wiki
+- Security: see `SECURITY.md`
+
+If you're an agent and you're stuck on something this file doesn't cover, fall back to reading the relevant `src/` directory and the matching tests — they're the source of truth.
