@@ -381,7 +381,7 @@ export class WAClient {
                 void this.sendNode({ tag: 'ib', attrs: {}, content: [{ tag: 'offline_batch', attrs: { count: '100' } }] }).catch(() => { });
                 return;
             case 'edge_routing': {
-                const routingInfo = getBinaryNodeChild(getBinaryNodeChild(child, 'edge_routing'), 'routing_info');
+                const routingInfo = getBinaryNodeChild(child, 'routing_info');
                 if (routingInfo?.content)
                     this.authState.creds.routingInfo = Buffer.from(routingInfo.content);
                 return;
