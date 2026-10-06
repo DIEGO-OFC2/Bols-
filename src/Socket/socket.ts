@@ -493,7 +493,7 @@ export const makeSocket = (config: SocketConfig) => {
 		}
 
 		const uploadLogic = async (retryCount: number): Promise<void> => {
-			logger.info({ count, retryCount }, 'uploading pre-keys')
+			logger.debug({ count, retryCount }, 'uploading pre-keys')
 
 			// Generate and save pre-keys atomically (prevents ID collisions on retry)
 			const node = await keys.transaction(async () => {
@@ -507,14 +507,14 @@ export const makeSocket = (config: SocketConfig) => {
 			// Upload to server (outside transaction, can fail without affecting local keys)
 			try {
 				await query(node)
-				logger.info({ count }, 'uploaded pre-keys successfully')
+				logger.debug({ count }, 'uploaded pre-keys successfully')
 			} catch (uploadError) {
 				logger.error({ uploadError: (uploadError as Error).toString(), count }, 'Failed to upload pre-keys to server')
 
 				// Recurse into uploadLogic; calling uploadPreKeys would await its own in-flight promise.
 				if (retryCount < 3) {
 					const backoffDelay = Math.min(1000 * Math.pow(2, retryCount), 10000)
-					logger.info(`Retrying pre-key upload in ${backoffDelay}ms`)
+					logger.warn(`Retrying pre-key upload in ${backoffDelay}ms`)
 					await new Promise(resolve => setTimeout(resolve, backoffDelay))
 					return uploadLogic(retryCount + 1)
 				}
@@ -558,8 +558,8 @@ export const makeSocket = (config: SocketConfig) => {
 			else count = MIN_PREKEY_COUNT
 			const { exists: currentPreKeyExists, currentPreKeyId } = await verifyCurrentPreKeyExists()
 
-			logger.info(`${preKeyCount} pre-keys found on server`)
-			logger.info(`Current prekey ID: ${currentPreKeyId}, exists in storage: ${currentPreKeyExists}`)
+			logger.debug(`${preKeyCount} pre-keys found on server`)
+			logger.debug(`Current prekey ID: ${currentPreKeyId}, exists in storage: ${currentPreKeyExists}`)
 
 			const lowServerCount = preKeyCount <= count
 			const missingCurrentPreKey = !currentPreKeyExists && currentPreKeyId > 0
@@ -571,10 +571,10 @@ export const makeSocket = (config: SocketConfig) => {
 				if (lowServerCount) reasons.push(`server count low (${preKeyCount})`)
 				if (missingCurrentPreKey) reasons.push(`current prekey ${currentPreKeyId} missing from storage`)
 
-				logger.info(`Uploading PreKeys due to: ${reasons.join(', ')}`)
+				logger.debug(`Uploading PreKeys due to: ${reasons.join(', ')}`)
 				await uploadPreKeys(count)
 			} else {
-				logger.info(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
+				logger.debug(`PreKey validation passed - Server: ${preKeyCount}, Current prekey ${currentPreKeyId} exists`)
 			}
 		} catch (error) {
 			logger.error({ error }, 'Failed to check/upload pre-keys during initialization')

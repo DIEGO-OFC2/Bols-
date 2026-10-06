@@ -4,6 +4,7 @@ import { proto } from '../../WAProto/index.js'
 import { DEFAULT_CACHE_TTLS, WA_DEFAULT_EPHEMERAL } from '../Defaults'
 import type {
 	AnyMessageContent,
+	GroupMetadata,
 	MediaConnInfo,
 	MessageReceiptType,
 	MessageRelayOptions,
@@ -111,6 +112,29 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			stdTTL: DEFAULT_CACHE_TTLS.USER_DEVICES, // 5 minutes
 			useClones: false
 		})
+
+	/**
+	 * Group metadata is stable for minutes at a time, but a group send needs the
+	 * participant list to encrypt the sender key. Without a cache every send pays
+	 * a full `w:g2` IQ round-trip. Cache it and invalidate on the group events we
+	 * already receive, so the TTL is only a safety net.
+	 */
+	const groupMetadataCache = new NodeCache<GroupMetadata>({
+		stdTTL: DEFAULT_CACHE_TTLS.GROUP_METADATA,
+		useClones: false
+	})
+
+	const invalidateGroupMetadata = (jids: (string | undefined)[]) => {
+		for (const jid of jids) {
+			if (jid) {
+				void groupMetadataCache.del(jid)
+			}
+		}
+	}
+
+	ev.on('groups.update', updates => invalidateGroupMetadata(updates.map(u => u.id)))
+	ev.on('groups.upsert', groups => invalidateGroupMetadata(groups.map(g => g.id)))
+	ev.on('group-participants.update', ({ id }) => invalidateGroupMetadata([id]))
 	/** Serializes writes to userDevicesCache across USync refresh and device-notification handling. */
 	const devicesMutex = makeMutex()
 
@@ -709,11 +733,19 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			if (isGroupOrStatus && !isRetryResend) {
 				const [groupData, senderKeyMap] = await Promise.all([
 					(async () => {
-						let groupData = useCachedGroupMetadata && cachedGroupMetadata ? await cachedGroupMetadata(jid) : undefined // todo: should we rely on the cache specially if the cache is outdated and the metadata has new fields?
+						let groupData = await groupMetadataCache.get(jid)
+						if (!groupData && useCachedGroupMetadata && cachedGroupMetadata) {
+							groupData = await cachedGroupMetadata(jid)
+							if (groupData) {
+								await groupMetadataCache.set(jid, groupData)
+							}
+						}
+
 						if (groupData && Array.isArray(groupData?.participants)) {
 							logger.trace({ jid, participants: groupData.participants.length }, 'using cached group metadata')
 						} else if (!isStatus) {
 							groupData = await groupMetadata(jid) // TODO: start storing group participant list + addr mode in Signal & stop relying on this
+							await groupMetadataCache.set(jid, groupData)
 						}
 
 						return groupData
