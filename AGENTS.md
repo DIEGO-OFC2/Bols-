@@ -151,9 +151,16 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   private mode and drop every event whose `key.fromMe` is false, so a
   hardcoded `fromMe: false` silently swallows all owner commands. Use
   `recipient` as the chat when present and compare `from`/`participant` to
-  `creds.me.id` **and** `creds.me.lid` with `areJidsSameUser`. `test/receive-test.ts`
+  `creds.me.id` **and**   `creds.me.lid` with `areJidsSameUser`. `test/receive-test.ts`
   covers 1:1 peer, self-echo, and group echo. Acks must target the stanza's
   `from`, not the chat.
+- Inbound keys must also carry the alternate addressing fields Baileys exposes
+  (`remoteJidAlt`/`remoteJidUsername` on 1:1, `participantAlt`/`participantUsername`
+  on groups), derived from `sender_pn`/`sender_lid`/`recipient_pn`/`recipient_lid`
+  via `extractAddressingContext`. WhatsApp addresses a growing share of chats by
+  an opaque LID; hosts (e.g. V3's `realJid`) resolve the phone-number form
+  through these fields and silently mis-handle admin/owner checks and replies
+  when they are absent. `test/lid-addressing-test.ts` guards this.
 - The login payload goes out with `passive: true`; the server then holds back
   the message stream. Baileys flips to active with
   `<iq to="s.whatsapp.net" xmlns="passive" type="set"><active/></iq>` right

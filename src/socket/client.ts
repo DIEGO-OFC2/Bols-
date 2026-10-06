@@ -117,7 +117,16 @@ type UserEvents = {
 }
 
 export interface IncomingMessage {
-  key: { remoteJid: string; fromMe: boolean; id: string; participant?: string }
+  key: {
+    remoteJid: string
+    remoteJidAlt?: string
+    remoteJidUsername?: string
+    fromMe: boolean
+    id: string
+    participant?: string
+    participantAlt?: string
+    participantUsername?: string
+  }
   message: IMessage
   messageTimestamp: number
   pushName?: string
@@ -174,9 +183,13 @@ export interface WAMessage {
 
 export interface WAMessageKey {
   remoteJid: string
+  remoteJidAlt?: string
+  remoteJidUsername?: string
   fromMe?: boolean
   id: string
   participant?: string
+  participantAlt?: string
+  participantUsername?: string
 }
 
 export interface SendMessageOptions {
@@ -251,6 +264,32 @@ const deferred = <T>(): Deferred<T> => {
   // observe the rejection through `promise`.
   void promise.catch(() => {})
   return { promise, resolve, reject }
+}
+
+/**
+ * Resolve the alternate-addressing counterpart of a stanza, mirroring Baileys'
+ * `extractAddressingContext`. WhatsApp addresses a growing share of chats by an
+ * opaque LID; hosts (and lightwa's own `fromMe` detection) still need the
+ * phone-number form, so the stanza carries `sender_pn`/`sender_lid` and
+ * `recipient_pn`/`recipient_lid`. Without surfacing these, a LID-addressed
+ * message has no resolvable phone number and hosts that resolve identities
+ * (admin/owner checks, reply routing) silently mis-handle it.
+ */
+const extractAddressingContext = (
+  stanza: BinaryNode
+): { addressingMode: string; senderAlt?: string; recipientAlt?: string } => {
+  const sender = stanza.attrs.participant || stanza.attrs.from
+  const addressingMode = stanza.attrs.addressing_mode || (sender?.endsWith('lid') ? 'lid' : 'pn')
+  let senderAlt: string | undefined
+  let recipientAlt: string | undefined
+  if (addressingMode === 'lid') {
+    senderAlt = stanza.attrs.participant_pn || stanza.attrs.sender_pn || stanza.attrs.peer_recipient_pn
+    recipientAlt = stanza.attrs.recipient_pn
+  } else {
+    senderAlt = stanza.attrs.participant_lid || stanza.attrs.sender_lid || stanza.attrs.peer_recipient_lid
+    recipientAlt = stanza.attrs.recipient_lid
+  }
+  return { addressingMode, senderAlt, recipientAlt }
 }
 
 export class WAClient {
@@ -1400,8 +1439,23 @@ export class WAClient {
 
       const message = decodeMessage(decryptResult.plaintext)
       const messageTimestamp = attrs.t ? +attrs.t : Math.floor(Date.now() / 1000)
+      // Baileys always exposes the alternate addressing form: `remoteJidAlt` on
+      // 1:1 chats (the sender's LID/PN counterpart) and `participantAlt` on
+      // groups. Hosts resolve the phone number through these, so dropping them
+      // leaves a LID-addressed message with no resolvable identity.
+      const addressing = extractAddressingContext(stanza)
+      const isGroupChat = isJidGroup(remoteJid)
       const incoming: IncomingMessage = {
-        key: { remoteJid, fromMe, id: attrs.id!, participant },
+        key: {
+          remoteJid,
+          remoteJidAlt: !isGroupChat ? addressing.senderAlt : undefined,
+          remoteJidUsername: !isGroupChat ? attrs.peer_recipient_username || attrs.recipient_username : undefined,
+          fromMe,
+          id: attrs.id!,
+          participant,
+          participantAlt: isGroupChat ? addressing.senderAlt : undefined,
+          participantUsername: participant ? attrs.participant_username : undefined
+        },
         message,
         messageTimestamp,
         ...(attrs.notify ? { pushName: attrs.notify } : {})

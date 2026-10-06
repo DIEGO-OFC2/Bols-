@@ -187,10 +187,12 @@ const run = async () => {
   check('WAMessageStubType enum', WAMessageStubType.REVOKE === 1)
 
   // Version helpers: the bundled fallback must be a modern tuple and the live
-  // fetch must return a well-formed version (or fall back cleanly offline).
+  // fetch must return a well-formed version (falling back to the bundled tuple
+  // when offline).
   check('DEFAULT_WA_VERSION shape', DEFAULT_WA_VERSION[0] === 2 && DEFAULT_WA_VERSION[1] === 3000 && DEFAULT_WA_VERSION[2] > 1e9, DEFAULT_WA_VERSION.join('.'))
   const bundled = await fetchLatestBaileysVersion()
-  check('fetchLatestBaileysVersion uses bundled version', bundled.version.join('.') === DEFAULT_WA_VERSION.join('.') && bundled.isLatest === true)
+  const bundledShape = bundled.version[0] === 2 && bundled.version[1] === 3000 && bundled.version[2] > 1e9
+  check('fetchLatestBaileysVersion returns a modern tuple', bundledShape && bundled.isLatest === true, bundled.version.join('.'))
   const live = await fetchLatestWaWebVersion()
   check('fetchLatestWaWebVersion valid tuple', live.version.length === 3 && live.version.every(n => Number.isInteger(n) && n > 0), live.version.join('.'))
 

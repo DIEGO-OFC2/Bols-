@@ -77,9 +77,13 @@ type UserEvents = {
 export interface IncomingMessage {
     key: {
         remoteJid: string;
+        remoteJidAlt?: string;
+        remoteJidUsername?: string;
         fromMe: boolean;
         id: string;
         participant?: string;
+        participantAlt?: string;
+        participantUsername?: string;
     };
     message: IMessage;
     messageTimestamp: number;
@@ -129,9 +133,13 @@ export interface WAMessage {
 }
 export interface WAMessageKey {
     remoteJid: string;
+    remoteJidAlt?: string;
+    remoteJidUsername?: string;
     fromMe?: boolean;
     id: string;
     participant?: string;
+    participantAlt?: string;
+    participantUsername?: string;
 }
 export interface SendMessageOptions {
     quoted?: WAMessage;
