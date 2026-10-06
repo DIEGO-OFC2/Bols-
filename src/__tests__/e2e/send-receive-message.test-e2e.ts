@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { downloadContentFromMessage, downloadMediaMessage, proto, toBuffer, type WAMessage } from '../../index'
 import { TestClient } from './helpers/test-client'
 
+const FIXTURES = './src/__tests__/e2e/fixtures'
+
 jest.setTimeout(60_000)
 
 describe('E2E Tests', () => {
@@ -74,7 +76,7 @@ describe('E2E Tests', () => {
 
 	test('should send an image message', async () => {
 		const sent = await tc.sock.sendMessage(tc.meJid, {
-			image: readFileSync('./Media/cat.jpeg'),
+			image: readFileSync(`${FIXTURES}/cat.jpeg`),
 			caption: 'E2E Test Image'
 		})
 		expect(sent!.message?.imageMessage?.caption).toBe('E2E Test Image')
@@ -82,7 +84,7 @@ describe('E2E Tests', () => {
 
 	test('should send a video message with a thumbnail', async () => {
 		const sent = await tc.sock.sendMessage(tc.meJid, {
-			video: readFileSync('./Media/ma_gif.mp4'),
+			video: readFileSync(`${FIXTURES}/ma_gif.mp4`),
 			caption: 'E2E Test Video'
 		})
 		expect(sent!.message?.videoMessage?.caption).toBe('E2E Test Video')
@@ -90,7 +92,7 @@ describe('E2E Tests', () => {
 
 	test('should send a PTT (push-to-talk) audio message', async () => {
 		const sent = await tc.sock.sendMessage(tc.meJid, {
-			audio: readFileSync('./Media/sonata.mp3'),
+			audio: readFileSync(`${FIXTURES}/sonata.mp3`),
 			ptt: true,
 			mimetype: 'audio/mp4'
 		})
@@ -99,7 +101,7 @@ describe('E2E Tests', () => {
 
 	test('should send a document message', async () => {
 		const sent = await tc.sock.sendMessage(tc.meJid, {
-			document: readFileSync('./Media/ma_gif.mp4'),
+			document: readFileSync(`${FIXTURES}/ma_gif.mp4`),
 			mimetype: 'application/pdf',
 			fileName: 'E2E Test Document.pdf'
 		})
@@ -107,7 +109,7 @@ describe('E2E Tests', () => {
 	})
 
 	test('should send a sticker message', async () => {
-		const sent = await tc.sock.sendMessage(tc.meJid, { sticker: readFileSync('./Media/cat.jpeg') })
+		const sent = await tc.sock.sendMessage(tc.meJid, { sticker: readFileSync(`${FIXTURES}/cat.jpeg`) })
 		expect(sent!.message?.stickerMessage).toBeDefined()
 	})
 
@@ -137,7 +139,7 @@ describe('E2E Tests', () => {
 		const caption = 'E2E Test Image Download Success'
 		const received = tc.waitForMessage(m => m.message?.imageMessage?.caption === caption)
 
-		await tc.sock.sendMessage(tc.meJid, { image: readFileSync('./Media/cat.jpeg'), caption })
+		await tc.sock.sendMessage(tc.meJid, { image: readFileSync(`${FIXTURES}/cat.jpeg`), caption })
 		const msg = await received
 
 		const buffer = await downloadMediaMessage(
@@ -159,7 +161,7 @@ describe('E2E Tests', () => {
 		const caption = 'E2E Test LID Image Download'
 		const received = tc.waitForMessage(m => m.message?.imageMessage?.caption === caption)
 
-		await tc.sock.sendMessage(tc.meLid!, { image: readFileSync('./Media/cat.jpeg'), caption })
+		await tc.sock.sendMessage(tc.meLid!, { image: readFileSync(`${FIXTURES}/cat.jpeg`), caption })
 		const msg = await received
 
 		const buffer = await downloadMediaMessage(
@@ -179,7 +181,7 @@ describe('E2E Tests', () => {
 		const caption = 'E2E Test Low-Level Download'
 		const received = tc.waitForMessage(m => m.message?.imageMessage?.caption === caption)
 
-		await tc.sock.sendMessage(tc.meJid, { image: readFileSync('./Media/cat.jpeg'), caption })
+		await tc.sock.sendMessage(tc.meJid, { image: readFileSync(`${FIXTURES}/cat.jpeg`), caption })
 		const msg = await received
 
 		const imageMessage = msg.message?.imageMessage
@@ -199,7 +201,10 @@ describe('E2E Tests', () => {
 		const command = '-download'
 
 		const imageReceived = tc.waitForMessage(m => m.message?.imageMessage?.caption === caption)
-		const sentImage = await tc.sock.sendMessage(tc.meJid, { image: readFileSync('./Media/cat.jpeg'), caption })
+		const sentImage = await tc.sock.sendMessage(tc.meJid, {
+			image: readFileSync(`${FIXTURES}/cat.jpeg`),
+			caption
+		})
 		await imageReceived
 
 		const commandReceived = tc.waitForText(command)
@@ -234,7 +239,10 @@ describe('E2E Tests', () => {
 		const videoReceived = tc.waitForMessage(
 			m => m.key?.remoteJid === tc.groupJid && m.message?.videoMessage?.caption === caption
 		)
-		const sentVideo = await tc.sock.sendMessage(tc.groupJid, { video: readFileSync('./Media/ma_gif.mp4'), caption })
+		const sentVideo = await tc.sock.sendMessage(tc.groupJid, {
+			video: readFileSync(`${FIXTURES}/ma_gif.mp4`),
+			caption
+		})
 		await videoReceived
 
 		const commandReceived = tc.waitForText(command, { remoteJid: tc.groupJid })

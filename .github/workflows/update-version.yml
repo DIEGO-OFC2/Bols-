@@ -84,5 +84,5 @@ jobs:
           - \`src/Defaults/baileys-version.json\`
           - \`src/Defaults/index.ts\`
           - \`src/Utils/generics.ts\`" \
-            --base master \
+            --base main \
             --head "$BRANCH_NAME" || echo "PR already exists or could not be created"
