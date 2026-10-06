@@ -173,24 +173,23 @@ export class ByteReader {
     get done() {
         return this.pos >= this.buf.length;
     }
-    /** Unsigned varint, exact for values < 2^32 (the only ones on our paths). */
+    /** Unsigned varint, exact up to 2^53 (covers every field we decode). */
     varint() {
         let b = this.buf[this.pos++];
         if (b < 0x80)
             return b;
+        // Multi-byte varint. Accumulate with multiplication rather than bit shifts:
+        // 64-bit timestamps (e.g. `timestampMs`) span six bytes and shift-based
+        // accumulation truncates them, leaving the reader mid-field and desynced.
+        // Values stay exact up to 2^53, which covers every field we decode.
         let result = b & 0x7f;
-        let shift = 7;
-        while (shift < 28) {
+        let mult = 128;
+        while (b >= 0x80) {
             b = this.buf[this.pos++];
-            result |= (b & 0x7f) << shift;
-            if ((b & 0x80) === 0)
-                return result >>> 0;
-            shift += 7;
+            result += (b & 0x7f) * mult;
+            mult *= 128;
         }
-        // Fifth byte may contribute bits above 28. Returns a possibly > 2^32
-        // number (exact up to 2^53), which is fine for the fields we decode.
-        const fifth = this.buf[this.pos++];
-        return (result >>> 0) + (fifth & 0x7f) * 0x10000000;
+        return result;
     }
     /** Reads a field key and returns `(field << 3) | wireType`. */
     key() {
@@ -217,8 +216,14 @@ export class ByteReader {
     skip(wireType) {
         if (wireType === WIRE_VARINT)
             this.varint();
-        else if (wireType === WIRE_BYTES)
-            this.pos += this.varint();
+        else if (wireType === WIRE_BYTES) {
+            // Read the length first, then advance. `this.pos += this.varint()` is
+            // wrong: JS evaluates `this.pos` before the right-hand side, so the
+            // reader would jump by (oldPos + len) and desync on every unknown
+            // length-delimited field.
+            const len = this.varint();
+            this.pos += len;
+        }
         else if (wireType === WIRE_32BIT)
             this.pos += 4;
         else if (wireType === WIRE_64BIT)

@@ -47,7 +47,7 @@ export declare class ByteReader {
     pos: number;
     constructor(buf: Uint8Array, start?: number);
     get done(): boolean;
-    /** Unsigned varint, exact for values < 2^32 (the only ones on our paths). */
+    /** Unsigned varint, exact up to 2^53 (covers every field we decode). */
     varint(): number;
     /** Reads a field key and returns `(field << 3) | wireType`. */
     key(): number;

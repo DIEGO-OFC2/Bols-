@@ -77,6 +77,16 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   zero-copy `subarray` reads) rather than the generic `ProtoWriter`/`ProtoReader`,
   which allocates a `Buffer` per varint byte. Verify any codec change with
   `test/message-cross-test.ts` (byte-identical to WAProto) and `npm run bench`.
+- `ByteReader` must stay faithful to protobuf wire semantics on *unknown* fields,
+  because real messages carry fields the hand-rolled codec does not model. Two
+  traps that desynced the reader and threw `unsupported proto wire type N`:
+  `skip(WIRE_BYTES)` must read the length into a local before advancing
+  (`this.pos += this.varint()` uses the pre-read position, off by one per skipped
+  field), and `varint()` must consume *every* continuation byte (64-bit
+  timestamps like `timestampMs` span six bytes; the old shift loop stopped at
+  five). Both were caught live, not by round-trip tests — the interop suite only
+  re-encodes fields lightwa itself models, so it never exercised `skip`. Prefer
+  hand-crafted wire bytes (or a real captured payload) when testing the reader.
 - Signal payloads are padded, not raw protobuf. WhatsApp clients run the encoded
   `Message` through `writeRandomPadMax16` (PKCS#7-style, random length 1..16)
   before Signal encryption and `unpadRandomMax16` after decryption; the padding

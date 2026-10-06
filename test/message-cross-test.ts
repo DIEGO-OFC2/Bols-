@@ -95,6 +95,26 @@ const run = () => {
   const refSkdm = refEncode({ senderKeyDistributionMessage: { groupId: 'h@g.us', axolotlSenderKeyDistributionMessage: Buffer.from([7, 8]) } })
   check('lightwa reads reference skdm', decodeMessage(refSkdm).senderKeyDistributionMessage!.groupId === 'h@g.us')
 
+  // Regression: an unknown length-delimited field must be skipped by its own
+  // length, not by (current position + length). Real bytes captured from a live
+  // message: conversation "No" followed by messageContextInfo whose first field
+  // (deviceListMetadata) lightwa does not model and therefore skips. The old
+  // `this.pos += this.varint()` desynced the reader into the padding and threw
+  // "unsupported proto wire type 6".
+  const live = Buffer.from(
+    '0a024e6f9a024a0a240a0a7835f7a7c2f413ecbe4d108e8dfbd506420ac74814fc0d564a45a3744892a294d60610021a200fd50ef59eb7e4ce1a2ccd29cd19241972a71aaeabc34561e461caa66abe70f1',
+    'hex'
+  )
+  const rl = decodeMessage(live)
+  check('lightwa skips unknown length-delimited field', rl.conversation === 'No' && rl.messageContextInfo !== undefined)
+
+  // Regression: a six-byte varint (value >= 2^35, e.g. a `timestampMs`) must be
+  // read whole. The old shift-based reader stopped after five bytes, leaving the
+  // position mid-field so the next key parsed as a bogus wire type.
+  const bigVarint = Buffer.from('6207789bead58e9134', 'hex')
+  const rb = decodeMessage(bigVarint)
+  check('lightwa reads six-byte varint', rb.protocolMessage?.timestampMs === 1791300564251)
+
   console.log(`\n${pass}/${total} message proto interop checks passed`)
   if (pass !== total) process.exitCode = 1
 }
