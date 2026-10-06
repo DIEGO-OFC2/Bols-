@@ -11,6 +11,7 @@ import { encodeHandshakeMessage, decodeHandshakeMessage } from '../proto/handsha
 import { encodeClientPayload } from '../proto/client-payload.js'
 import { NoiseHandler, NOISE_WA_HEADER } from './noise-handler.js'
 import { bytesToCrockford } from '../utils/generics.js'
+import { buildAckStanza } from '../utils/stanza-ack.js'
 import { initAuthState, initAuthCreds, type AuthenticationState } from '../utils/auth-utils.js'
 import { buildCompanionFinish, configureSuccessfulPairing, generateLoginNode, generateRegistrationNode, type ConnectionConfig } from '../utils/validate-connection.js'
 import { buildPairingQRData, getCompanionPlatformId } from '../utils/companion-utils.js'
@@ -186,7 +187,13 @@ export interface SendMessageOptions {
   contextInfo?: Record<string, any>
 }
 
-export const DEFAULT_WA_VERSION: [number, number, number] = [2, 3000, 1043857760]
+/**
+ * lightwa's bundled WhatsApp web version, used when the live revision cannot be
+ * fetched. Update this when the server starts rejecting the tuple (a stale
+ * version makes the server answer `<failure reason="405">` before the
+ * handshake). Prefer `fetchLatestWaWebVersion()` at runtime.
+ */
+export const DEFAULT_WA_VERSION: [number, number, number] = [2, 3000, 1049395099]
 const DEFAULT_URL = 'wss://web.whatsapp.com/ws/chat'
 const DEFAULT_ORIGIN = 'https://web.whatsapp.com'
 const MAX_QR_REFS = 5
@@ -555,7 +562,10 @@ export class WAClient {
     }
 
     if (tag === 'notification') {
-      if (attrs.type === 'w:gp2') return void this.handleGroupNotification(node)
+      if (attrs.type === 'w:gp2') {
+        this.handleGroupNotification(node)
+        return void this.ackStanza(node)
+      }
       // The phone triggers the second pairing leg with a `primary_hello`
       // notification once the user enters the code. Without handling it the
       // companion never sends `companion_finish` and no `pair-success` arrives.
@@ -565,7 +575,10 @@ export class WAClient {
       // server of pre-keys and peers can no longer open sessions to us, so the
       // socket connects and saves but silently receives nothing.
       if (attrs.type === 'encrypt') return void this.handleEncryptNotification(node)
-      return
+      // Every notification must be acked, even the ones we do not act on;
+      // WA Web does the same. An unacked notification stays in the server's
+      // delivery queue.
+      return void this.ackStanza(node)
     }
 
     // Server-driven "information" stanzas. Most are informational, but
@@ -598,6 +611,9 @@ export class WAClient {
         void this.end(new Error('Multi-device beta not joined'), DisconnectReason.multideviceMismatch)
         return
       default:
+        // Unknown server info stanza (e.g. `dirty`): ack it so it is not
+        // redelivered. Guarded on id/from inside `ackStanza`.
+        void this.ackStanza(node)
         return
     }
   }
@@ -650,8 +666,6 @@ export class WAClient {
    * are acked and ignored.
    */
   private async handleCompanionRegNotification(node: BinaryNode): Promise<void> {
-    const from = node.attrs.from
-    const id = node.attrs.id
     try {
       const reg = getBinaryNodeChild(node, 'link_code_companion_reg')
       const hasPayload =
@@ -661,13 +675,7 @@ export class WAClient {
         !!getBinaryNodeChild(reg, 'link_code_pairing_wrapped_primary_ephemeral_pub')
       if (hasPayload) await this.handleCompanionReg(reg!)
     } finally {
-      if (from && id) {
-        await this.sendNode({
-          tag: 'ack',
-          attrs: { id, to: from, class: 'notification', type: 'link_code_companion_reg' },
-          content: undefined
-        }).catch(() => {})
-      }
+      void this.ackStanza(node)
     }
   }
 
@@ -686,7 +694,13 @@ export class WAClient {
   private handleSuccess(node: BinaryNode): void {
     if (this.qrTimer) clearTimeout(this.qrTimer)
     const me = this.authState.creds.me
-    if (node.attrs.lid && me) me.lid = node.attrs.lid
+    if (node.attrs.lid && me) {
+      me.lid = node.attrs.lid
+      // Baileys emits this so hosts that persist on `creds.update` keep our own
+      // LID across restarts; without it the LID is lost and `areJidsSameUser`
+      // can no longer recognise self-echoes / LID-addressed stanzas.
+      this.ev.emit('creds.update', { me: { ...me, lid: node.attrs.lid } })
+    }
     this.user = me ? { id: me.id, name: me.name, lid: me.lid } : undefined
     // Login goes out with `passive: true` (see `generateLoginNode`), which makes
     // the server hold back the message stream. Baileys flips to active right
@@ -770,22 +784,15 @@ export class WAClient {
    * us its one-time pre-key supply is low. Upload more, then ack the stanza.
    */
   private async handleEncryptNotification(node: BinaryNode): Promise<void> {
-    const from = node.attrs.from
     try {
-      if (from === S_WHATSAPP_NET) {
+      if (node.attrs.from === S_WHATSAPP_NET) {
         const count = +(getBinaryNodeChild(node, 'count')?.attrs.value ?? '0')
         if (count < MIN_PREKEY_COUNT) await this.uploadPreKeys(MIN_PREKEY_COUNT)
       }
     } catch (err) {
       this.config.logger.warn({ err }, 'failed to handle encrypt notification')
     } finally {
-      if (from && node.attrs.id) {
-        await this.sendNode({
-          tag: 'ack',
-          attrs: { id: node.attrs.id, to: from, class: 'notification', type: 'encrypt' },
-          content: undefined
-        }).catch(() => {})
-      }
+      void this.ackStanza(node)
     }
   }
 
@@ -1409,10 +1416,14 @@ export class WAClient {
       }
       this.config.onMessage?.(incoming)
       this.ev.emit('messages.upsert', { messages: [incoming], type: 'notify' })
-      void this.sendMessageAck(stanza, from, attrs.id!, participant)
+      void this.sendMessageAck(stanza)
     } catch (err) {
       this.config.logger.warn({ err }, 'failed to handle incoming message')
-      this.retryRequest(stanza).catch(() => {})
+      // WA Web retry-receipts a message it cannot decrypt *and* NACKs the
+      // stanza. Sending only the retry receipt leaves the server waiting on an
+      // ack, which can stall the delivery queue.
+      void this.retryRequest(stanza).catch(() => {})
+      void this.sendMessageAck(stanza, 500)
     }
   }
 
@@ -1472,10 +1483,16 @@ export class WAClient {
     return { plaintext }
   }
 
-  private async sendMessageAck(stanza: BinaryNode, from: string, id: string, participant?: string): Promise<void> {
-    const attrs: Record<string, string> = { to: from, id, type: 'receipt' }
-    if (participant) attrs.participant = participant
-    await this.sendNode({ tag: 'ack', attrs, content: undefined }).catch(() => {})
+  /** Ack a received notification/info stanza; no-op when it carries no id/from. */
+  private async ackStanza(node: BinaryNode): Promise<void> {
+    if (!node.attrs.id || !node.attrs.from) return
+    await this.sendNode(buildAckStanza(node, undefined, this.authState.creds.me?.id)).catch(() => {})
+  }
+
+  private async sendMessageAck(stanza: BinaryNode, errorCode?: number): Promise<void> {
+    if (!stanza.attrs.id || !stanza.attrs.from) return
+    const meId = this.authState.creds.me?.id
+    await this.sendNode(buildAckStanza(stanza, errorCode, meId)).catch(() => {})
   }
 
   // -------------------------------------------------------------------------
@@ -1718,13 +1735,15 @@ export class WAClient {
     // `available`/`unavailable` are global presence and carry our push name;
     // `composing`/`recording`/`paused` are per-chat chatstate stanzas.
     if (type === 'available' || type === 'unavailable') {
-      // Baileys refuses global presence without a push name (the stanza carries
-      // it); hosts would otherwise think they are online when they are not.
-      if (!me.name) return
       this.ev.emit('connection.update', { isOnline: type === 'available' })
+      // A QR-linked companion has no push name until app-state sync (which
+      // lightwa does not implement yet), but the presence stanza still flips the
+      // linked device to online on the phone. Baileys bails out when `me.name`
+      // is missing, which is why such sessions show only "last active"; send the
+      // stanza regardless and include the name only when we actually have one.
       await this.sendNode({
         tag: 'presence',
-        attrs: { name: me.name.replace(/@/g, ''), type },
+        attrs: { ...(me.name ? { name: me.name.replace(/@/g, '') } : {}), type },
         content: undefined
       })
       return

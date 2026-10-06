@@ -63,6 +63,7 @@ export interface BaileysSocketConfig {
     defaultQueryTimeoutMs?: number;
     syncFullHistory?: boolean;
     markOnlineOnConnect?: boolean;
+    pushName?: string;
     waWebSocketUrl?: string;
     [key: string]: unknown;
 }

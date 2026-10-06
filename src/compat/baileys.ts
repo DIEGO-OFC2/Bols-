@@ -48,10 +48,13 @@ export { DEFAULT_WA_VERSION }
  * tuple: the middle field is thousands and an out-of-date value makes the
  * server drop the connection with `<failure reason="405">`.
  */
-export const fetchLatestBaileysVersion = async (): Promise<{ version: [number, number, number]; isLatest: boolean }> => ({
-  version: DEFAULT_WA_VERSION,
-  isLatest: true
-})
+export const fetchLatestBaileysVersion = async (): Promise<{ version: [number, number, number]; isLatest: boolean }> => {
+  // Baileys hardcodes a bundled version here, but the live revision is cheap to
+  // fetch and a stale one makes the server drop the connection with
+  // `<failure reason="405">`. Fall back to the bundled tuple when offline.
+  const live = await fetchLatestWaWebVersion()
+  return { version: live.version, isLatest: live.isLatest }
+}
 
 /**
  * Fetch the live web client revision from `web.whatsapp.com/sw.js` (mirrors
@@ -87,6 +90,7 @@ export interface BaileysSocketConfig {
   defaultQueryTimeoutMs?: number
   syncFullHistory?: boolean
   markOnlineOnConnect?: boolean
+  pushName?: string
   waWebSocketUrl?: string
   [key: string]: unknown
 }
@@ -100,7 +104,8 @@ export const makeWASocket = (config: BaileysSocketConfig = {}): WAClient => {
     connectTimeoutMs: config.connectTimeoutMs ?? config.defaultQueryTimeoutMs,
     keepAliveIntervalMs: config.keepAliveIntervalMs,
     markOnlineOnConnect: config.markOnlineOnConnect,
-    syncFullHistory: config.syncFullHistory
+    syncFullHistory: config.syncFullHistory,
+    pushName: config.pushName
   }
   if (config.auth) socketConfig.auth = { creds: config.auth.creds, keys: config.auth.keys }
   const sock = new WAClient(socketConfig)

@@ -140,6 +140,12 @@ export interface SendMessageOptions {
     /** Extra fields merged into the outgoing content's `contextInfo`. */
     contextInfo?: Record<string, any>;
 }
+/**
+ * lightwa's bundled WhatsApp web version, used when the live revision cannot be
+ * fetched. Update this when the server starts rejecting the tuple (a stale
+ * version makes the server answer `<failure reason="405">` before the
+ * handshake). Prefer `fetchLatestWaWebVersion()` at runtime.
+ */
 export declare const DEFAULT_WA_VERSION: [number, number, number];
 export declare class WAClient {
     readonly ev: Emitter<UserEvents>;
@@ -300,6 +306,8 @@ export declare class WAClient {
     private handleIncomingMessage;
     private retryRequest;
     private decryptMessageNode;
+    /** Ack a received notification/info stanza; no-op when it carries no id/from. */
+    private ackStanza;
     private sendMessageAck;
     private generateMessageId;
     private messageType;

@@ -129,6 +129,21 @@ const main = async () => {
   check('low pre-key notification triggers upload', notifUpload.length > beforeNotif)
   const notifAck = received.find(n => n.tag === 'ack' && n.attrs.id === 'PREKEY-LOW')
   check('pre-key notification acked', notifAck?.attrs.class === 'notification' && notifAck?.attrs.to === '@s.whatsapp.net')
+  check('pre-key ack forwards type', notifAck?.attrs.type === 'encrypt', notifAck?.attrs.type)
+
+  // Unknown notifications must still be acked (WA Web acks every notification),
+  // otherwise they stay in the server's delivery queue.
+  serverSend!({
+    tag: 'notification',
+    attrs: { from: 's.whatsapp.net', id: 'UNKNOWN-NOTIF', type: 'server_sync' },
+    content: [{ tag: 'something', attrs: {} }]
+  })
+  for (let i = 0; i < 100 && !received.some(n => n.tag === 'ack' && n.attrs.id === 'UNKNOWN-NOTIF'); i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const unknownAck = received.find(n => n.tag === 'ack' && n.attrs.id === 'UNKNOWN-NOTIF')
+  check('unknown notification acked', unknownAck?.attrs.class === 'notification', unknownAck?.attrs.class)
+  check('unknown notification ack forwards type', unknownAck?.attrs.type === 'server_sync', unknownAck?.attrs.type)
 
   // markOnlineOnConnect (default true) must announce presence with our push
   // name, or the linked device shows as inactive on the phone.
@@ -139,6 +154,20 @@ const main = async () => {
   check('available presence sent on connect', !!presence)
   check('presence carries push name', presence?.attrs.name === 'tester', `got=${presence?.attrs.name}`)
   check('isOnline emitted', isOnline === true)
+
+  // A QR-linked companion has no push name until app-state sync (which lightwa
+  // does not implement). Presence must still go out so the linked device is not
+  // stuck showing "last active" instead of online.
+  client.authState.creds.me!.name = ''
+  const beforeAnon = received.filter(n => n.tag === 'presence').length
+  await client.sendPresenceUpdate('available')
+  for (let i = 0; i < 100 && received.filter(n => n.tag === 'presence').length === beforeAnon; i++) {
+    await new Promise(r => setTimeout(r, 10))
+  }
+  const anonPresence = received.filter(n => n.tag === 'presence')[beforeAnon]
+  check('nameless presence still sent', !!anonPresence)
+  check('nameless presence omits name', anonPresence?.attrs.name === undefined, `got=${anonPresence?.attrs.name}`)
+  check('nameless presence is available', anonPresence?.attrs.type === 'available')
 
   await client.close()
   wss.close()

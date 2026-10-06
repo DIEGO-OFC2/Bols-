@@ -43,10 +43,13 @@ export { DEFAULT_WA_VERSION };
  * tuple: the middle field is thousands and an out-of-date value makes the
  * server drop the connection with `<failure reason="405">`.
  */
-export const fetchLatestBaileysVersion = async () => ({
-    version: DEFAULT_WA_VERSION,
-    isLatest: true
-});
+export const fetchLatestBaileysVersion = async () => {
+    // Baileys hardcodes a bundled version here, but the live revision is cheap to
+    // fetch and a stale one makes the server drop the connection with
+    // `<failure reason="405">`. Fall back to the bundled tuple when offline.
+    const live = await fetchLatestWaWebVersion();
+    return { version: live.version, isLatest: live.isLatest };
+};
 /**
  * Fetch the live web client revision from `web.whatsapp.com/sw.js` (mirrors
  * Baileys), falling back to lightwa's bundled version when offline.
@@ -81,7 +84,8 @@ export const makeWASocket = (config = {}) => {
         connectTimeoutMs: config.connectTimeoutMs ?? config.defaultQueryTimeoutMs,
         keepAliveIntervalMs: config.keepAliveIntervalMs,
         markOnlineOnConnect: config.markOnlineOnConnect,
-        syncFullHistory: config.syncFullHistory
+        syncFullHistory: config.syncFullHistory,
+        pushName: config.pushName
     };
     if (config.auth)
         socketConfig.auth = { creds: config.auth.creds, keys: config.auth.keys };

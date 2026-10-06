@@ -132,9 +132,29 @@ const run = async () => {
   check('group peer emitted', !!bobGroupMsg)
   check('group peer fromMe=false', bobGroupMsg?.key.fromMe === false)
 
-  // ── acks target the stanza `from`, not the chat ──────────────────────────
+  // ── acks mirror WA Web's buildAckStanza ──────────────────────────────────
   const ackForSelf = acks.find(a => a.tag === 'ack' && a.attrs.id === 'MSG-SELF')
   check('ack sent to original from', ackForSelf?.attrs.to === ME_DEVICE_JID, ackForSelf?.attrs.to)
+  check('ack class is message', ackForSelf?.attrs.class === 'message', ackForSelf?.attrs.class)
+  // device 0 is normalized off the JID on the wire
+  check('message ack carries our id as from', ackForSelf?.attrs.from === ME_JID, ackForSelf?.attrs.from)
+  check('self-echo ack forwards recipient', ackForSelf?.attrs.recipient === BOB_JID, ackForSelf?.attrs.recipient)
+
+  const ackForGroup = acks.find(a => a.tag === 'ack' && a.attrs.id === 'MSG-GROUP-BOB')
+  check('group ack forwards participant', ackForGroup?.attrs.participant === BOB_JID, ackForGroup?.attrs.participant)
+
+  // ── undecryptable message: retry receipt + NACK (error=500) ──────────────
+  const beforeAcks = acks.length
+  await (client as any).handleIncomingMessage({
+    tag: 'message',
+    attrs: { from: BOB_JID, id: 'MSG-BAD', t: '1700000004' },
+    content: [{ tag: 'enc', attrs: { type: 'msg', v: '2' }, content: Buffer.from('garbage') }]
+  })
+  for (let i = 0; i < 100 && acks.length === beforeAcks; i++) await new Promise(r => setTimeout(r, 5))
+  const nack = acks.find(a => a.tag === 'ack' && a.attrs.id === 'MSG-BAD')
+  check('undecryptable message NACKed', nack?.attrs.error === '500', nack?.attrs.error)
+  const retry = acks.find(a => a.tag === 'receipt' && a.attrs.id === 'MSG-BAD' && a.attrs.type === 'retry')
+  check('undecryptable message retry-receipted', !!retry)
 
   console.log(`\n${pass}/${total} receive pipeline checks passed`)
   if (pass !== total) process.exitCode = 1
