@@ -57,7 +57,15 @@ export class SignalRepository {
     this.storage = {
       loadSession: async id => {
         const wireId = await this.resolveWireId(id)
-        const { [wireId]: sess } = await keys.get('session', [wireId])
+        let { [wireId]: sess } = await keys.get('session', [wireId])
+        if (!sess) {
+          // The mapping may have appeared after the session was stored (or been
+          // lost on restart): fall back to the other addressing form so a
+          // PN-keyed session still serves a LID-addressed message, and vice
+          // versa.
+          const altId = await this.altWireId(wireId)
+          if (altId) sess = (await keys.get('session', [altId]))[altId]
+        }
         if (!sess) return null
         const data = typeof sess === 'string' ? JSON.parse(sess) : sess
         return SessionRecord.deserialize(data as any)
@@ -97,6 +105,14 @@ export class SignalRepository {
     }
   }
 
+  /** The Signal storage key for a JID, matching the wire addressing form. */
+  private jidToSignalAddress(jid: string): string {
+    const decoded = jidDecode(jid)!
+    const domainType = decoded.domainType ?? WAJIDDomains.WHATSAPP
+    const user = domainType !== WAJIDDomains.WHATSAPP ? `${decoded.user}_${domainType}` : decoded.user
+    return `${user}.${decoded.device ?? 0}`
+  }
+
   /** Map a PN signal address to its LID equivalent when a mapping exists. */
   private async resolveWireId(id: string): Promise<string> {
     if (!id.includes('.')) return id
@@ -108,15 +124,57 @@ export class SignalRepository {
     const pnJid = jidNormalizedUser(`${user}${device !== '0' ? `:${device}` : ''}@s.whatsapp.net`)
     const lidJid = await this.lidMapping.getLIDForPN(pnJid)
     if (!lidJid) return id
-    const d = jidDecode(lidJid)!
-    return `${d.user}.${d.device ?? 0}`
+    // Key the LID form exactly as `address()` does, so a session stored under
+    // either addressing form is reachable from the other.
+    return this.jidToSignalAddress(lidJid)
   }
 
   private address(jid: string): string {
-    const decoded = jidDecode(jid)!
-    const domainType = decoded.domainType ?? WAJIDDomains.WHATSAPP
-    const user = domainType !== WAJIDDomains.WHATSAPP ? `${decoded.user}_${domainType}` : decoded.user
-    return `${user}.${decoded.device ?? 0}`
+    return this.jidToSignalAddress(jid)
+  }
+
+  /**
+   * The counterpart storage key for an address whose record was not found —
+   * the LID form of a PN key, or the PN form of a LID key. Uses the stored LID
+   * mapping when present and falls back to the stanza-level `@lid` form, so a
+   * session survives whichever addressing form the server chose first.
+   */
+  private async altWireId(resolved: string): Promise<string | undefined> {
+    const [userDevice, device] = resolved.split('.')
+    const [user, domainTypeStr] = userDevice!.split('_')
+    const domainType = parseInt(domainTypeStr || '0', 10)
+    const dev = device ?? '0'
+
+    if (domainType === WAJIDDomains.WHATSAPP) {
+      const lid = await this.lidMapping.getLIDForPN(jidNormalizedUser(`${user}:${dev}@s.whatsapp.net`))
+      return lid ? this.jidToSignalAddress(lid) : undefined
+    }
+    if (domainType === WAJIDDomains.LID) {
+      const pn = await this.lidMapping.getPNForLID(jidNormalizedUser(`${user}:${dev}@lid`))
+      if (pn) return this.jidToSignalAddress(pn)
+      return `${user}.${dev}`
+    }
+    return undefined
+  }
+
+  /**
+   * Re-key a stored session from one addressing form to another (PN → LID).
+   * The server may start addressing a peer by LID after the session was opened
+   * against its phone number; without migrating, the LID-addressed message
+   * finds no session and is silently dropped. The source key is kept as a
+   * fallback because the LID mapping itself is in-memory and lost on restart.
+   */
+  async migrateSession(fromJid: string, toJid: string): Promise<void> {
+    if (!fromJid || !toJid) return
+    const from = this.jidToSignalAddress(fromJid)
+    const to = this.jidToSignalAddress(toJid)
+    if (from === to) return
+    // Read the raw record: `loadSession` would already redirect through the
+    // just-stored mapping and miss the source key.
+    const { [from]: raw } = await this.auth.keys.get('session', [from])
+    if (!raw) return
+    const record = SessionRecord.deserialize(typeof raw === 'string' ? JSON.parse(raw) : (raw as any))
+    await this.auth.keys.set({ session: { [to]: record.serialize() as any } })
   }
 
   async hasSession(jid: string): Promise<boolean> {

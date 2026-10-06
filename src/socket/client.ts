@@ -1523,7 +1523,22 @@ export class WAClient {
     if (type === 'skmsg') {
       plaintext = await repo.decryptGroupMessage(from, authorJid, ciphertext)
     } else {
-      plaintext = await repo.decryptMessage(authorJid, type, ciphertext)
+      // The server may address a peer by LID while its session was opened
+      // against the phone number (or vice versa). Resolve to the LID form and
+      // learn the mapping from the envelope so both forms reach the session.
+      const addressing = extractAddressingContext(stanza)
+      const decryptionJid = isLidUser(authorJid)
+        ? authorJid
+        : (await repo.lidMapping.getLIDForPN(jidNormalizedUser(authorJid))) || authorJid
+      if (addressing.senderAlt && isLidUser(addressing.senderAlt) && isPnUser(authorJid) && decryptionJid === authorJid) {
+        try {
+          await repo.lidMapping.storeLIDPNMappings([{ lid: addressing.senderAlt, pn: authorJid }])
+          await repo.migrateSession(authorJid, addressing.senderAlt)
+        } catch (err) {
+          this.config.logger.warn({ err }, 'failed to store LID mapping from envelope')
+        }
+      }
+      plaintext = await repo.decryptMessage(decryptionJid, type, ciphertext)
     }
 
     const message = decodeMessage(plaintext)

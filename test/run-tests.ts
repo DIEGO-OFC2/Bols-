@@ -18,7 +18,9 @@ const suites = [
   'test/media-cross-test.ts',
   'test/compat-test.ts',
   'test/native-crypto-test.ts',
-  'test/repository-test.ts'
+  'test/repository-test.ts',
+  'test/session-addressing-test.ts',
+  'test/lid-session-transition-test.ts'
 ]
 
 let failed = 0
