@@ -2,43 +2,101 @@ import * as constants from './constants'
 import { type FullJid, jidDecode } from './jid-utils'
 import type { BinaryNode, BinaryNodeCodingOptions } from './types'
 
+const utf8Encoder = new TextEncoder()
+const utf8Scratch = new Uint8Array(2048)
+
+/**
+ * Growable byte sink. Writes into a single Buffer with a cursor instead of
+ * pushing byte-by-byte into a number[] and copying at the end; `set` copies
+ * whole slices in one memcpy.
+ */
+class ByteWriter {
+	private buf: Buffer
+	private pos = 0
+
+	constructor(size = 4096) {
+		this.buf = Buffer.allocUnsafe(size)
+	}
+
+	private ensure(extra: number) {
+		const needed = this.pos + extra
+		if (needed <= this.buf.length) {
+			return
+		}
+
+		let size = this.buf.length * 2
+		while (size < needed) {
+			size *= 2
+		}
+
+		const next = Buffer.allocUnsafe(size)
+		this.buf.copy(next, 0, 0, this.pos)
+		this.buf = next
+	}
+
+	pushByte(value: number) {
+		this.ensure(1)
+		this.buf[this.pos++] = value & 0xff
+	}
+
+	pushBytes(bytes: Uint8Array) {
+		this.ensure(bytes.length)
+		this.buf.set(bytes, this.pos)
+		this.pos += bytes.length
+	}
+
+	toBuffer(): Buffer {
+		return Buffer.from(this.buf.subarray(0, this.pos))
+	}
+}
+
 export const encodeBinaryNode = (
 	node: BinaryNode,
-	opts: Pick<BinaryNodeCodingOptions, 'TAGS' | 'TOKEN_MAP'> = constants,
-	buffer: number[] = [0]
+	opts: Pick<BinaryNodeCodingOptions, 'TAGS' | 'TOKEN_MAP'> = constants
 ): Buffer => {
-	const encoded = encodeBinaryNodeInner(node, opts, buffer)
-	return Buffer.from(encoded)
+	const writer = new ByteWriter()
+	writer.pushByte(0)
+	encodeBinaryNodeInner(node, opts, writer)
+	return writer.toBuffer()
 }
 
 const encodeBinaryNodeInner = (
 	{ tag, attrs, content }: BinaryNode,
 	opts: Pick<BinaryNodeCodingOptions, 'TAGS' | 'TOKEN_MAP'>,
-	buffer: number[]
-): number[] => {
+	writer: ByteWriter
+): void => {
 	const { TAGS, TOKEN_MAP } = opts
+	const buffer = writer
 
-	const pushByte = (value: number) => buffer.push(value & 0xff)
+	const pushByte = (value: number) => buffer.pushByte(value)
 
 	const pushInt = (value: number, n: number, littleEndian = false) => {
 		for (let i = 0; i < n; i++) {
 			const curShift = littleEndian ? i : n - 1 - i
-			buffer.push((value >> (curShift * 8)) & 0xff)
+			buffer.pushByte((value >> (curShift * 8)) & 0xff)
 		}
 	}
 
 	const pushBytes = (bytes: Uint8Array | Buffer | number[]) => {
-		// index loop avoids the per-call iterator allocation of for..of on typed arrays
-		for (let i = 0; i < bytes.length; i++) {
-			buffer.push(bytes[i]!)
+		// numbers are rare (tag tuples); typed arrays go straight through memcpy
+		if (Array.isArray(bytes)) {
+			buffer.pushBytes(Uint8Array.from(bytes))
+		} else {
+			buffer.pushBytes(bytes)
 		}
 	}
 
 	const pushInt16 = (value: number) => {
-		pushBytes([(value >> 8) & 0xff, value & 0xff])
+		pushByte((value >> 8) & 0xff)
+		pushByte(value & 0xff)
 	}
 
-	const pushInt20 = (value: number) => pushBytes([(value >> 16) & 0x0f, (value >> 8) & 0xff, value & 0xff])
+	const pushInt20 = (value: number) => {
+		pushByte((value >> 16) & 0x0f)
+		pushByte((value >> 8) & 0xff)
+		pushByte(value & 0xff)
+	}
+
 	const writeByteLength = (length: number) => {
 		if (length >= 4294967296) {
 			throw new Error('string too large to encode: ' + length)
@@ -57,7 +115,15 @@ const encodeBinaryNodeInner = (
 	}
 
 	const writeStringRaw = (str: string) => {
-		const bytes = Buffer.from(str, 'utf-8')
+		let bytes: Uint8Array
+		if (str.length <= 512) {
+			// encodeInto reuses a scratch buffer, avoiding a Buffer alloc per string
+			const { written } = utf8Encoder.encodeInto(str, utf8Scratch)
+			bytes = utf8Scratch.subarray(0, written)
+		} else {
+			bytes = utf8Encoder.encode(str)
+		}
+
 		writeByteLength(bytes.length)
 		pushBytes(bytes)
 	}
@@ -213,7 +279,8 @@ const encodeBinaryNodeInner = (
 		if (listSize === 0) {
 			pushByte(TAGS.LIST_EMPTY)
 		} else if (listSize < 256) {
-			pushBytes([TAGS.LIST_8, listSize])
+			pushByte(TAGS.LIST_8)
+			pushByte(listSize)
 		} else {
 			pushByte(TAGS.LIST_16)
 			pushInt16(listSize)
@@ -255,13 +322,11 @@ const encodeBinaryNodeInner = (
 		)
 		writeListStart(validContent.length)
 		for (const item of validContent) {
-			encodeBinaryNodeInner(item, opts, buffer)
+			encodeBinaryNodeInner(item, opts, writer)
 		}
 	} else if (typeof content === 'undefined') {
 		// do nothing
 	} else {
 		throw new Error(`invalid children for header "${tag}": ${content} (${typeof content})`)
 	}
-
-	return buffer
 }
