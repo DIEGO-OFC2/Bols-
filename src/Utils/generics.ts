@@ -60,17 +60,19 @@ export const writeRandomPadMax16 = (msg: Uint8Array) => {
 }
 
 export const unpadRandomMax16 = (e: Uint8Array | Buffer) => {
-	const t = new Uint8Array(e)
-	if (0 === t.length) {
+	const len = e.length
+	if (0 === len) {
 		throw new Error('unpadPkcs7 given empty bytes')
 	}
 
-	var r = t[t.length - 1]!
-	if (r > t.length) {
-		throw new Error(`unpad given ${t.length} bytes, but pad is ${r}`)
+	// last byte holds the pad length; read it in place instead of copying the
+	// whole payload just to slice off the tail
+	const r = e[len - 1]!
+	if (r > len) {
+		throw new Error(`unpad given ${len} bytes, but pad is ${r}`)
 	}
 
-	return new Uint8Array(t.buffer, t.byteOffset, t.length - r)
+	return new Uint8Array(e.buffer, e.byteOffset, len - r)
 }
 
 // code is inspired by whatsmeow

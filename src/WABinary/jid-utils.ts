@@ -54,16 +54,38 @@ export const jidEncode = (user: string | number | null, server: JidServer, devic
 
 export const jidDecode = (jid: string | undefined): FullJid | undefined => {
 	// todo: investigate how to implement hosted ids in this case
-	const sepIdx = typeof jid === 'string' ? jid.indexOf('@') : -1
+	if (typeof jid !== 'string') {
+		return undefined
+	}
+
+	const sepIdx = jid.indexOf('@')
 	if (sepIdx < 0) {
 		return undefined
 	}
 
-	const server = jid!.slice(sepIdx + 1)
-	const userCombined = jid!.slice(0, sepIdx)
+	const server = jid.slice(sepIdx + 1)
+	const userCombined = jid.slice(0, sepIdx)
 
-	const [userAgent, device] = userCombined.split(':')
-	const [user, agent] = userAgent!.split('_')
+	// parse user[:device][_agent] with plain slicing; indexOf-based parsing
+	// avoids the intermediate arrays split() would allocate on this hot path
+	let userAgent = userCombined
+	let device: string | undefined
+	const colonIdx = userCombined.indexOf(':')
+	if (colonIdx >= 0) {
+		userAgent = userCombined.slice(0, colonIdx)
+		const nextColon = userCombined.indexOf(':', colonIdx + 1)
+		device = nextColon >= 0 ? userCombined.slice(colonIdx + 1, nextColon) : userCombined.slice(colonIdx + 1)
+	}
+
+	let user = userAgent
+	let agent: string | undefined
+	const underscoreIdx = userAgent.indexOf('_')
+	if (underscoreIdx >= 0) {
+		user = userAgent.slice(0, underscoreIdx)
+		const nextUnderscore = userAgent.indexOf('_', underscoreIdx + 1)
+		agent =
+			nextUnderscore >= 0 ? userAgent.slice(underscoreIdx + 1, nextUnderscore) : userAgent.slice(underscoreIdx + 1)
+	}
 
 	let domainType = WAJIDDomains.WHATSAPP
 	if (server === 'lid') {
@@ -78,15 +100,47 @@ export const jidDecode = (jid: string | undefined): FullJid | undefined => {
 
 	return {
 		server: server as JidServer,
-		user: user!,
+		user,
 		domainType,
 		device: device ? +device : undefined
 	}
 }
 
+/** the user portion of a jid, or undefined when there is no `@` */
+const jidUser = (jid: string | undefined): string | undefined => {
+	if (typeof jid !== 'string') {
+		return undefined
+	}
+
+	const at = jid.indexOf('@')
+	if (at < 0) {
+		return undefined
+	}
+
+	const colon = jid.indexOf(':')
+	const underscore = jid.indexOf('_')
+	let end = at
+	if (colon >= 0 && colon < end) {
+		end = colon
+	}
+
+	if (underscore >= 0 && underscore < end) {
+		end = underscore
+	}
+
+	return jid.slice(0, end)
+}
+
 /** is the jid a user */
-export const areJidsSameUser = (jid1: string | undefined, jid2: string | undefined) =>
-	jidDecode(jid1)?.user === jidDecode(jid2)?.user
+export const areJidsSameUser = (jid1: string | undefined, jid2: string | undefined) => {
+	if (jid1 === jid2) {
+		return true
+	}
+
+	// both sides without a user portion compare equal (undefined === undefined)
+	return jidUser(jid1) === jidUser(jid2)
+}
+
 /** is the jid Meta AI */
 export const isJidMetaAI = (jid: string | undefined) => jid?.endsWith('@bot')
 /** is the jid a PN user */
