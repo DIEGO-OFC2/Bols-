@@ -87,10 +87,10 @@ TypeScript (ESM, Node >= 20). It is protocol-compatible with Baileys v7
   `sendBuiltMessage` (the device-sent copy carries an *unpadded* inner
   `message`, matching Baileys) and stripped in `decryptMessageNode` before
   decode — `unpadRandomMax16` returns the unpadded buffer, so the receive path
-  must return *that*, not the raw plaintext. The sender-key distribution message
-  is a Signal control message and is encrypted without padding.
+  must return *that*, not the raw plaintext. lightwa delivers the sender-key
+  distribution as its own Signal message, so it carries the same padding;
   `test/message-padding-test.ts` covers every pad length inbound and the padded
-  outbound stanza.
+  outbound stanza, and `test/receive-test.ts` covers a padded SKDM over the wire.
 - The native addon is strictly optional and must never be a hard dependency.
   `src/crypto/native.ts` returns `null` on any failure (missing binary, bad ABI,
   no `dlopen`) and every call site must fall back to `@noble/hashes`. The addon
