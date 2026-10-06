@@ -78,15 +78,15 @@ export const makeCommunitiesSocket = (config: SocketConfig) => {
 	}
 
 	async function parseGroupResult(node: BinaryNode) {
-		logger.info({ node }, 'parseGroupResult')
+		logger.debug({ node }, 'parseGroupResult')
 		const groupNode = getBinaryNodeChild(node, 'group')
 		if (groupNode) {
 			try {
-				logger.info({ groupNode }, 'groupNode')
+				logger.debug({ groupNode }, 'groupNode')
 				const metadata = await sock.groupMetadata(`${groupNode.attrs.id}@g.us`)
 				return metadata ? metadata : Optional.empty()
 			} catch (error) {
-				console.error('Error parsing group metadata:', error)
+				logger.error({ err: error }, 'failed to parse group metadata')
 				return Optional.empty()
 			}
 		}

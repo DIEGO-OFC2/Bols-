@@ -16,6 +16,7 @@ import type {
 } from '../Types'
 import { type BinaryNode, getBinaryNodeChild, getBinaryNodeChildren, getBinaryNodeChildString } from '../WABinary'
 import { generateMessageIDV2 } from './generics'
+import type { ILogger } from './logger'
 import { getStream, getUrlFromDirectPath } from './messages-media'
 
 export const parseCatalogNode = (node: BinaryNode) => {
@@ -214,12 +215,13 @@ export const parseProductNode = (productNode: BinaryNode) => {
 export async function uploadingNecessaryImagesOfProduct<T extends ProductUpdate | ProductCreate>(
 	product: T,
 	waUploadToServer: WAMediaUploadFunction,
-	timeoutMs = 30_000
+	timeoutMs = 30_000,
+	logger?: ILogger
 ) {
 	product = {
 		...product,
 		images: product.images
-			? await uploadingNecessaryImages(product.images, waUploadToServer, timeoutMs)
+			? await uploadingNecessaryImages(product.images, waUploadToServer, timeoutMs, logger)
 			: product.images
 	}
 	return product
@@ -231,7 +233,8 @@ export async function uploadingNecessaryImagesOfProduct<T extends ProductUpdate 
 export const uploadingNecessaryImages = async (
 	images: WAMediaUpload[],
 	waUploadToServer: WAMediaUploadFunction,
-	timeoutMs = 30_000
+	timeoutMs = 30_000,
+	logger?: ILogger
 ) => {
 	const results = await Promise.all(
 		images.map<Promise<{ url: string }>>(async img => {
@@ -248,22 +251,25 @@ export const uploadingNecessaryImages = async (
 			const filePath = join(tmpdir(), 'img' + generateMessageIDV2())
 			const encFileWriteStream = createWriteStream(filePath)
 
-			for await (const block of stream) {
-				hasher.update(block)
-				encFileWriteStream.write(block)
+			try {
+				for await (const block of stream) {
+					hasher.update(block)
+					encFileWriteStream.write(block)
+				}
+
+				const sha = hasher.digest('base64')
+
+				const { directPath } = await waUploadToServer(filePath, {
+					mediaType: 'product-catalog-image',
+					fileEncSha256B64: sha,
+					timeoutMs
+				})
+
+				return { url: getUrlFromDirectPath(directPath) }
+			} finally {
+				encFileWriteStream.end()
+				await fs.unlink(filePath).catch(err => logger?.debug({ err, filePath }, 'failed to delete temp upload file'))
 			}
-
-			const sha = hasher.digest('base64')
-
-			const { directPath } = await waUploadToServer(filePath, {
-				mediaType: 'product-catalog-image',
-				fileEncSha256B64: sha,
-				timeoutMs
-			})
-
-			await fs.unlink(filePath).catch(err => console.log('Error deleting temp file ', err))
-
-			return { url: getUrlFromDirectPath(directPath) }
 		})
 	)
 	return results
