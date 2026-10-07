@@ -40,3 +40,27 @@ export const makeKeyedMutex = () => {
 }
 
 export type KeyedMutex = ReturnType<typeof makeKeyedMutex>
+
+/**
+ * Minimal serial task queue. Tasks run one at a time in submission order,
+ * matching `p-queue({ concurrency: 1 })` without pulling its dependency tree
+ * (p-timeout, eventemitter3) into the package.
+ */
+export const makeTaskQueue = () => {
+	let tail: Promise<void> = Promise.resolve()
+
+	return {
+		add<T>(task: () => Promise<T> | T): Promise<T> {
+			const run = tail.then(() => task())
+			// Keep the chain alive across rejections so one failing task
+			// doesn't stall the queue behind it.
+			tail = run.then(
+				() => undefined,
+				() => undefined
+			)
+			return run
+		}
+	}
+}
+
+export type TaskQueue = ReturnType<typeof makeTaskQueue>

@@ -2,7 +2,6 @@ import { Boom } from '@hapi/boom'
 import { AsyncLocalStorage } from 'async_hooks'
 import { Mutex } from 'async-mutex'
 import { randomBytes } from 'crypto'
-import PQueue from 'p-queue'
 import { DEFAULT_CACHE_SIZES, DEFAULT_CACHE_TTLS } from '../Defaults'
 import type {
 	AuthenticationCreds,
@@ -17,6 +16,7 @@ import { makeBoundedCache } from './cache-utils'
 import { Curve, signedKeyPair } from './crypto'
 import { delay, generateRegistrationId } from './generics'
 import type { ILogger } from './logger'
+import { makeTaskQueue } from './make-mutex'
 import { PreKeyManager } from './pre-key-manager'
 
 /**
@@ -115,7 +115,7 @@ export const addTransactionCapability = (
 	const txStorage = new AsyncLocalStorage<TransactionContext>()
 
 	// Queues for concurrency control (keyed by signal data type - bounded set)
-	const keyQueues = new Map<string, PQueue>()
+	const keyQueues = new Map<string, ReturnType<typeof makeTaskQueue>>()
 
 	// Transaction mutexes with reference counting for cleanup
 	const txMutexes = new Map<string, Mutex>()
@@ -127,9 +127,9 @@ export const addTransactionCapability = (
 	/**
 	 * Get or create a queue for a specific key type
 	 */
-	function getQueue(key: string): PQueue {
+	function getQueue(key: string): ReturnType<typeof makeTaskQueue> {
 		if (!keyQueues.has(key)) {
-			keyQueues.set(key, new PQueue({ concurrency: 1 }))
+			keyQueues.set(key, makeTaskQueue())
 		}
 
 		return keyQueues.get(key)!
