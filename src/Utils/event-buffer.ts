@@ -12,6 +12,7 @@ import type {
 	WAMessageKey
 } from '../Types'
 import { WAMessageStatus } from '../Types'
+import { makeCappedSet } from './cache-utils'
 import { trimUndefined } from './generics'
 import type { ILogger } from './logger'
 import { updateMessageWithReaction, updateMessageWithReceipt } from './messages'
@@ -72,14 +73,14 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
  */
 export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter => {
 	const ev = new EventEmitter()
-	const historyCache = new Set<string>()
+	const MAX_HISTORY_CACHE_SIZE = 10000 // Bound the history cache; LRU eviction keeps the newest entries
+	const historyCache = makeCappedSet(MAX_HISTORY_CACHE_SIZE)
 
 	let data = makeBufferData()
 	let isBuffering = false
 	let bufferTimeout: NodeJS.Timeout | null = null
 	let flushPendingTimeout: NodeJS.Timeout | null = null // Add a specific timer for the debounced flush to prevent leak
 	let bufferCount = 0
-	const MAX_HISTORY_CACHE_SIZE = 10000 // Limit the history cache size to prevent memory bloat
 	const BUFFER_TIMEOUT_MS = 30000 // 30 seconds
 
 	// take the generic event and fire it as a baileys event
@@ -129,12 +130,6 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		if (flushPendingTimeout) {
 			clearTimeout(flushPendingTimeout)
 			flushPendingTimeout = null
-		}
-
-		// Clear history cache if it exceeds the max size
-		if (historyCache.size > MAX_HISTORY_CACHE_SIZE) {
-			logger.debug({ cacheSize: historyCache.size }, 'Clearing history cache')
-			historyCache.clear()
 		}
 
 		const newData = makeBufferData()
@@ -287,7 +282,7 @@ const makeBufferData = (): BufferedEventData => {
 
 function append<E extends BufferableEvent>(
 	data: BufferedEventData,
-	historyCache: Set<string>,
+	historyCache: ReturnType<typeof makeCappedSet>,
 	event: E,
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	eventData: any,

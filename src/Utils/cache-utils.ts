@@ -65,7 +65,7 @@ export const makeBoundedCache = (max: number, ttlMs: number): BoundedCacheStore 
  * distinct keys holds every one of them for the process lifetime. Pairing a
  * `Set` with an LRU cap keeps membership O(1) while the cap bounds memory.
  */
-export const makeCappedSet = (max: number, ttlMs: number) => {
+export const makeCappedSet = (max: number, ttlMs = 0) => {
 	const store = new LRUCache<string, true>({ max, ttl: ttlMs })
 
 	return {
