@@ -830,7 +830,9 @@ export const makeSocket = (config: SocketConfig) => {
 		return Buffer.concat([salt, randomIv, ciphered])
 	}
 
-	ws.on('message', onMessageReceived)
+	ws.on('message', data => {
+		onMessageReceived(data).catch(err => onUnexpectedError(err, 'handling incoming message'))
+	})
 
 	ws.on('open', async () => {
 		try {
