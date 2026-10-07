@@ -57,6 +57,9 @@ const REAL_MSG_STUB_TYPES = new Set([
 
 const REAL_MSG_REQ_ME_STUB_TYPES = new Set([WAMessageStubType.GROUP_PARTICIPANT_ADD])
 
+/** Cap on the persisted `processedHistoryMessages` list; only its presence is read. */
+const MAX_PROCESSED_HISTORY_MESSAGES = 50
+
 async function storeTcTokensFromHistorySync(
 	chats: Chat[],
 	signalRepository: SignalRepositoryWithLIDStore,
@@ -388,11 +391,15 @@ const processMessage = async (
 				if (process) {
 					// TODO: investigate
 					if (histNotification.syncType !== proto.HistorySync.HistorySyncType.ON_DEMAND) {
+						// Only the presence of this list is meaningful (`isLatest`), and it is
+						// persisted in creds, so cap it to keep long-lived sessions from growing
+						// the auth state (disk + memory) on every history sync.
+						const processed = [
+							...(creds.processedHistoryMessages || []),
+							{ key: message.key, messageTimestamp: message.messageTimestamp }
+						]
 						ev.emit('creds.update', {
-							processedHistoryMessages: [
-								...(creds.processedHistoryMessages || []),
-								{ key: message.key, messageTimestamp: message.messageTimestamp }
-							]
+							processedHistoryMessages: processed.slice(-MAX_PROCESSED_HISTORY_MESSAGES)
 						})
 					}
 
