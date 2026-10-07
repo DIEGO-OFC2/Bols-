@@ -1,7 +1,52 @@
-import { Mutex as AsyncMutex } from 'async-mutex'
+/**
+ * Minimal async mutex, API-compatible with the parts of `async-mutex` this
+ * package used (runExclusive / acquire / isLocked). Keeping it in-repo drops
+ * the dependency; waiters are served in FIFO order through a promise chain.
+ */
+export const createMutex = () => {
+	let tail: Promise<void> = Promise.resolve()
+	let pending = 0
+
+	const acquire = async (): Promise<() => void> => {
+		let release!: () => void
+		const gate = new Promise<void>(resolve => {
+			release = resolve
+		})
+		const prev = tail
+		tail = prev.then(() => gate)
+		pending++
+
+		await prev
+
+		let released = false
+		return () => {
+			if (released) return
+			released = true
+			pending--
+			release()
+		}
+	}
+
+	return {
+		acquire,
+		async runExclusive<T>(task: () => Promise<T> | T): Promise<T> {
+			const release = await acquire()
+			try {
+				return await task()
+			} finally {
+				release()
+			}
+		},
+		isLocked(): boolean {
+			return pending > 0
+		}
+	}
+}
+
+export type AsyncMutex = ReturnType<typeof createMutex>
 
 export const makeMutex = () => {
-	const mutex = new AsyncMutex()
+	const mutex = createMutex()
 
 	return {
 		mutex<T>(code: () => Promise<T> | T): Promise<T> {
@@ -20,7 +65,7 @@ export const makeKeyedMutex = () => {
 			let entry = map.get(key)
 
 			if (!entry) {
-				entry = { mutex: new AsyncMutex(), refCount: 0 }
+				entry = { mutex: createMutex(), refCount: 0 }
 				map.set(key, entry)
 			}
 

@@ -1,6 +1,5 @@
 import { Boom } from '@hapi/boom'
 import { AsyncLocalStorage } from 'async_hooks'
-import { Mutex } from 'async-mutex'
 import { randomBytes } from 'crypto'
 import { DEFAULT_CACHE_SIZES, DEFAULT_CACHE_TTLS } from '../Defaults'
 import type {
@@ -16,7 +15,7 @@ import { makeBoundedCache } from './cache-utils'
 import { Curve, signedKeyPair } from './crypto'
 import { delay, generateRegistrationId } from './generics'
 import type { ILogger } from './logger'
-import { makeTaskQueue } from './make-mutex'
+import { type AsyncMutex, createMutex, makeTaskQueue } from './make-mutex'
 import { PreKeyManager } from './pre-key-manager'
 
 /**
@@ -42,7 +41,7 @@ export function makeCacheableSignalKeyStore(
 	const cache = _cache || makeBoundedCache(DEFAULT_CACHE_SIZES.SIGNAL_STORE, DEFAULT_CACHE_TTLS.SIGNAL_STORE * 1000)
 
 	// Mutex for protecting cache operations
-	const cacheMutex = new Mutex()
+	const cacheMutex = createMutex()
 
 	function getUniqueId(type: string, id: string) {
 		return `${type}.${id}`
@@ -118,7 +117,7 @@ export const addTransactionCapability = (
 	const keyQueues = new Map<string, ReturnType<typeof makeTaskQueue>>()
 
 	// Transaction mutexes with reference counting for cleanup
-	const txMutexes = new Map<string, Mutex>()
+	const txMutexes = new Map<string, AsyncMutex>()
 	const txMutexRefCounts = new Map<string, number>()
 
 	// Pre-key manager for specialized operations
@@ -138,9 +137,9 @@ export const addTransactionCapability = (
 	/**
 	 * Get or create a transaction mutex
 	 */
-	function getTxMutex(key: string): Mutex {
+	function getTxMutex(key: string): AsyncMutex {
 		if (!txMutexes.has(key)) {
-			txMutexes.set(key, new Mutex())
+			txMutexes.set(key, createMutex())
 			txMutexRefCounts.set(key, 0)
 		}
 

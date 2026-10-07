@@ -1,6 +1,51 @@
-import { makeKeyedMutex, makeMutex, makeTaskQueue } from '../../Utils/make-mutex'
+import { createMutex, makeKeyedMutex, makeMutex, makeTaskQueue } from '../../Utils/make-mutex'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
+
+describe('createMutex', () => {
+	it('grants the lock to one holder at a time, FIFO', async () => {
+		const mutex = createMutex()
+		const order: string[] = []
+
+		const first = mutex.acquire()
+		const second = mutex.acquire()
+
+		expect(mutex.isLocked()).toBe(true)
+		expect(order).toEqual([])
+
+		const releaseFirst = await first
+		order.push('first')
+		releaseFirst()
+
+		const releaseSecond = await second
+		order.push('second')
+		releaseSecond()
+
+		expect(order).toEqual(['first', 'second'])
+		expect(mutex.isLocked()).toBe(false)
+	})
+
+	it('runs the exclusive task and releases on throw', async () => {
+		const mutex = createMutex()
+
+		await expect(
+			mutex.runExclusive(() => {
+				throw new Error('boom')
+			})
+		).rejects.toThrow('boom')
+
+		expect(mutex.isLocked()).toBe(false)
+		await expect(mutex.runExclusive(() => 'ok')).resolves.toBe('ok')
+	})
+
+	it('ignores a double release', async () => {
+		const mutex = createMutex()
+		const release = await mutex.acquire()
+		release()
+		release()
+		expect(mutex.isLocked()).toBe(false)
+	})
+})
 
 describe('makeTaskQueue', () => {
 	it('runs tasks serially in submission order', async () => {

@@ -1,10 +1,10 @@
-import { Mutex } from 'async-mutex'
 import { mkdir, readFile, stat, unlink, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { proto } from '../../WAProto/index.js'
 import type { AuthenticationCreds, AuthenticationState, SignalDataTypeMap } from '../Types'
 import { initAuthCreds } from './auth-utils'
 import { BufferJSON } from './generics'
+import { type AsyncMutex, createMutex } from './make-mutex'
 
 // We need to lock files due to the fact that we are using async functions to read and write files
 // https://github.com/WhiskeySockets/Baileys/issues/794
@@ -13,12 +13,12 @@ import { BufferJSON } from './generics'
 // dropped once no reader/writer holds or waits on the lock, so a long-lived
 // session (or many sub-bots sharing this module) doesn't accumulate a mutex for
 // every file path it has ever touched.
-const fileLocks = new Map<string, { mutex: Mutex; refCount: number }>()
+const fileLocks = new Map<string, { mutex: AsyncMutex; refCount: number }>()
 
 const acquireFileLock = async (path: string): Promise<() => void> => {
 	let entry = fileLocks.get(path)
 	if (!entry) {
-		entry = { mutex: new Mutex(), refCount: 0 }
+		entry = { mutex: createMutex(), refCount: 0 }
 		fileLocks.set(path, entry)
 	}
 
