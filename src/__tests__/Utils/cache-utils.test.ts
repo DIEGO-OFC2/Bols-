@@ -1,4 +1,4 @@
-import { makeBoundedCache } from '../../Utils/cache-utils'
+import { makeBoundedCache, makeCappedSet } from '../../Utils/cache-utils'
 
 describe('makeBoundedCache', () => {
 	it('evicts the least recently used entry once max is exceeded', async () => {
@@ -38,5 +38,44 @@ describe('makeBoundedCache', () => {
 
 		await cache.flushAll()
 		expect(await cache.get('b')).toBeUndefined()
+	})
+})
+
+describe('makeCappedSet', () => {
+	it('caps the number of tracked keys', () => {
+		const set = makeCappedSet(2, 60_000)
+
+		set.add('a')
+		set.add('b')
+		set.add('c')
+
+		expect(set.has('a')).toBe(false)
+		expect(set.has('b')).toBe(true)
+		expect(set.has('c')).toBe(true)
+		expect(set.size).toBe(2)
+	})
+
+	it('expires entries after the ttl', async () => {
+		const set = makeCappedSet(10, 20)
+
+		set.add('a')
+		expect(set.has('a')).toBe(true)
+
+		await new Promise(resolve => setTimeout(resolve, 40))
+		expect(set.has('a')).toBe(false)
+	})
+
+	it('iterates, deletes and clears', () => {
+		const set = makeCappedSet(10, 60_000)
+
+		set.add('a')
+		set.add('b')
+		expect([...set].sort()).toEqual(['a', 'b'])
+
+		set.delete('a')
+		expect(set.has('a')).toBe(false)
+
+		set.clear()
+		expect(set.size).toBe(0)
 	})
 })

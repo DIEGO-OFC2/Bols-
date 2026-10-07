@@ -1,4 +1,3 @@
-import NodeCache from '@cacheable/node-cache'
 import { Boom } from '@hapi/boom'
 import { randomBytes } from 'crypto'
 import Long from 'long'
@@ -54,7 +53,7 @@ import {
 	xmppPreKey,
 	xmppSignedPreKey
 } from '../Utils'
-import { makeBoundedCache } from '../Utils/cache-utils'
+import { makeBoundedCache, makeCappedSet } from '../Utils/cache-utils'
 import { makeMutex } from '../Utils/make-mutex'
 import { makeOfflineNodeProcessor, type MessageType } from '../Utils/offline-node-processor'
 import { buildAckStanza } from '../Utils/stanza-ack'
@@ -151,11 +150,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 		config.callOfferCache || makeBoundedCache(DEFAULT_CACHE_SIZES.CALL_OFFER, DEFAULT_CACHE_TTLS.CALL_OFFER * 1000)
 
 	// Debounce identity-change session refreshes per JID to avoid bursts
-	const identityAssertDebounce = new NodeCache<boolean>({
-		stdTTL: 5,
-		maxKeys: DEFAULT_CACHE_SIZES.IDENTITY_DEBOUNCE,
-		useClones: false
-	})
+	const identityAssertDebounce = makeBoundedCache(DEFAULT_CACHE_SIZES.IDENTITY_DEBOUNCE, 5_000)
 
 	let sendActiveReceipts = false
 
@@ -1209,7 +1204,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 	 * Used to coalesce writes during a session; pruning always re-reads the persisted index
 	 * to cover writes made by other layers (e.g. history sync).
 	 */
-	const tcTokenKnownJids = new Set<string>()
+	const tcTokenKnownJids = makeCappedSet(DEFAULT_CACHE_SIZES.TC_TOKEN_INDEX, DEFAULT_CACHE_TTLS.TC_TOKEN_INDEX * 1000)
 
 	const tcTokenIndexLoaded = (async () => {
 		try {
@@ -2090,7 +2085,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			callOfferCache.close()
 		}
 
-		identityAssertDebounce.close()
+		identityAssertDebounce.close?.()
 		sendActiveReceipts = false
 	})
 

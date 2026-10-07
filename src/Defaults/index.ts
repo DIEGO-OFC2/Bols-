@@ -56,7 +56,8 @@ export const DEFAULT_CACHE_TTLS = {
 	MSG_RETRY: 60 * 60, // 1 hour
 	CALL_OFFER: 5 * 60, // 5 minutes
 	USER_DEVICES: 5 * 60, // 5 minutes
-	GROUP_METADATA: 5 * 60 // 5 minutes
+	GROUP_METADATA: 5 * 60, // 5 minutes
+	TC_TOKEN_INDEX: 28 * 24 * 60 * 60 // 28 days, matching the tctoken rolling window
 }
 
 /**
@@ -71,7 +72,8 @@ export const DEFAULT_CACHE_SIZES = {
 	MSG_RETRY: 2_000,
 	CALL_OFFER: 500,
 	PLACEHOLDER_RESEND: 2_000,
-	IDENTITY_DEBOUNCE: 5_000
+	IDENTITY_DEBOUNCE: 5_000,
+	TC_TOKEN_INDEX: 5_000
 }
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {

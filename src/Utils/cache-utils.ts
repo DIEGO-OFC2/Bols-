@@ -57,3 +57,38 @@ export const makeBoundedCache = (max: number, ttlMs: number): BoundedCacheStore 
 		}
 	}
 }
+
+/**
+ * A TTL- and entry-capped string set.
+ *
+ * `Set` has no eviction strategy, so a long-lived session that keeps inserting
+ * distinct keys holds every one of them for the process lifetime. Pairing a
+ * `Set` with an LRU cap keeps membership O(1) while the cap bounds memory.
+ */
+export const makeCappedSet = (max: number, ttlMs: number) => {
+	const store = new LRUCache<string, true>({ max, ttl: ttlMs })
+
+	return {
+		add(key: string): void {
+			store.set(key, true)
+		},
+		has(key: string): boolean {
+			return store.has(key)
+		},
+		delete(key: string): void {
+			store.delete(key)
+		},
+		clear(): void {
+			store.clear()
+		},
+		get size(): number {
+			return store.size
+		},
+		values(): IterableIterator<string> {
+			return store.keys()
+		},
+		[Symbol.iterator](): IterableIterator<string> {
+			return store.keys()
+		}
+	}
+}
