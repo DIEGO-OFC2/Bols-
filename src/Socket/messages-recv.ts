@@ -2085,7 +2085,7 @@ export const makeMessagesRecvSocket = (config: SocketConfig) => {
 			callOfferCache.close()
 		}
 
-		identityAssertDebounce.close?.()
+		identityAssertDebounce.close()
 		sendActiveReceipts = false
 	})
 

@@ -719,7 +719,7 @@ export const makeSocket = (config: SocketConfig) => {
 				logger.warn('keep alive called when WS not open')
 			}
 		}, keepAliveIntervalMs))
-	/** i have no idea why this exists. pls enlighten me */
+	/** toggle the account between passive and active presence on the server */
 	const sendPassiveIq = (tag: 'passive' | 'active') =>
 		query({
 			tag: 'iq',

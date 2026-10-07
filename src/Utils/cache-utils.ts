@@ -4,7 +4,7 @@ import type { PossiblyExtendedCacheStore } from '../Types'
 type CacheValue = object
 
 export type BoundedCacheStore = PossiblyExtendedCacheStore &
-	Required<Pick<PossiblyExtendedCacheStore, 'mget' | 'mset' | 'mdel'>>
+	Required<Pick<PossiblyExtendedCacheStore, 'mget' | 'mset' | 'mdel' | 'close'>>
 
 /**
  * A cache store that enforces both a TTL and a maximum number of entries.

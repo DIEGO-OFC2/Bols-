@@ -70,11 +70,18 @@ export class MessageRetryManager {
 			const separatorIndex = key.lastIndexOf(MESSAGE_KEY_SEPARATOR)
 			if (separatorIndex > -1) {
 				const messageId = key.slice(separatorIndex + MESSAGE_KEY_SEPARATOR.length)
-				this.messageKeyIndex.delete(messageId)
+				// Only drop the index entry if it still points at the evicted key;
+				// the same id may have been re-added under a different recipient.
+				if (this.messageKeyIndex.get(messageId) === key) {
+					this.messageKeyIndex.delete(messageId)
+				}
 			}
 		}
 	})
-	private messageKeyIndex = new Map<string, string>()
+	// Secondary index id -> cache key. Bounded to the same size as the message
+	// cache: without a cap, re-adding the same id under a different recipient
+	// drifts the index past the message cache's own ceiling.
+	private messageKeyIndex = new LRUCache<string, string>({ max: RECENT_MESSAGES_SIZE })
 	private sessionRecreateHistory = new LRUCache<string, number>({
 		max: 2_048,
 		ttl: RECREATE_SESSION_TIMEOUT * 2
