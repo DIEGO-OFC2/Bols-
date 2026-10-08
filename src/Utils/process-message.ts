@@ -57,6 +57,17 @@ const REAL_MSG_STUB_TYPES = new Set([
 
 const REAL_MSG_REQ_ME_STUB_TYPES = new Set([WAMessageStubType.GROUP_PARTICIPANT_ADD])
 
+/**
+ * Protocol message types that must originate from our own device. Hoisted out of
+ * `processMessage` so the set isn't rebuilt for every incoming message.
+ */
+const SELF_ONLY_PROTOCOL_TYPES = new Set<proto.Message.ProtocolMessage.Type>([
+	proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION,
+	proto.Message.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE,
+	proto.Message.ProtocolMessage.Type.LID_MIGRATION_MAPPING_SYNC,
+	proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE
+])
+
 /** Cap on the persisted `processedHistoryMessages` list; only its presence is read. */
 const MAX_PROCESSED_HISTORY_MESSAGES = 50
 
@@ -353,16 +364,10 @@ const processMessage = async (
 		// for the reference architecture — whatsmeow's `handleProtocolMessage`
 		// only contains self-only types because edits are unwrapped from
 		// `EditedMessage` BEFORE this dispatch and revokes aren't routed here.
-		const SELF_ONLY_TYPES = new Set<proto.Message.ProtocolMessage.Type>([
-			proto.Message.ProtocolMessage.Type.HISTORY_SYNC_NOTIFICATION,
-			proto.Message.ProtocolMessage.Type.APP_STATE_SYNC_KEY_SHARE,
-			proto.Message.ProtocolMessage.Type.LID_MIGRATION_MAPPING_SYNC,
-			proto.Message.ProtocolMessage.Type.PEER_DATA_OPERATION_REQUEST_RESPONSE_MESSAGE
-		])
 		if (
 			protocolMsg.type !== null &&
 			protocolMsg.type !== undefined &&
-			SELF_ONLY_TYPES.has(protocolMsg.type) &&
+			SELF_ONLY_PROTOCOL_TYPES.has(protocolMsg.type) &&
 			!message.key.fromMe
 		) {
 			logger?.warn(

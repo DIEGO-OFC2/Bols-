@@ -25,6 +25,9 @@ export function makeOfflineNodeProcessor(
 	batchSize = 10
 ) {
 	const nodes: OfflineNode[] = []
+	// Read cursor instead of `shift()`: the offline queue can hold thousands of
+	// stanzas and shifting re-indexes the whole array each time (O(n^2)).
+	let head = 0
 	let isProcessing = false
 
 	const enqueue = (type: MessageType, node: BinaryNode) => {
@@ -39,8 +42,8 @@ export function makeOfflineNodeProcessor(
 		const promise = async () => {
 			let processedInBatch = 0
 
-			while (nodes.length && deps.isWsOpen()) {
-				const { type, node } = nodes.shift()!
+			while (head < nodes.length && deps.isWsOpen()) {
+				const { type, node } = nodes[head++]!
 
 				const nodeProcessor = nodeProcessorMap.get(type)
 
@@ -58,6 +61,13 @@ export function makeOfflineNodeProcessor(
 					processedInBatch = 0
 					await deps.yieldToEventLoop()
 				}
+			}
+
+			// Drop the consumed prefix so the queue only holds unprocessed nodes
+			// (the socket may have closed mid-drain, leaving the tail behind).
+			if (head > 0) {
+				nodes.splice(0, head)
+				head = 0
 			}
 
 			isProcessing = false

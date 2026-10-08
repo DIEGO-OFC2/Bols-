@@ -6,30 +6,52 @@ import { type BinaryNode } from './types'
 
 const indexCache = new WeakMap<BinaryNode, Map<string, BinaryNode[]>>()
 
+/**
+ * All children with the given tag. The per-tag index is built lazily and cached on
+ * the node: building it up-front for every tag costs ~5x more than scanning when only
+ * one tag is ever read (the common case for a freshly decoded stanza), and it caches
+ * one array per tag instead of only the tags actually queried.
+ */
 export const getBinaryNodeChildren = (node: BinaryNode | undefined, childTag: string) => {
 	if (!node || !Array.isArray(node.content)) return []
 
 	let index = indexCache.get(node)
-
-	// Build the index once per node
 	if (!index) {
 		index = new Map<string, BinaryNode[]>()
-
-		for (const child of node.content) {
-			let arr = index.get(child.tag)
-			if (!arr) index.set(child.tag, (arr = []))
-			arr.push(child)
-		}
-
 		indexCache.set(node, index)
 	}
 
-	// Return first matching child
-	return index.get(childTag) || []
+	const cached = index.get(childTag)
+	if (cached) {
+		return cached
+	}
+
+	const matches: BinaryNode[] = []
+	for (const child of node.content) {
+		if (child.tag === childTag) {
+			matches.push(child)
+		}
+	}
+
+	index.set(childTag, matches)
+	return matches
 }
 
+/**
+ * First child with the given tag. Stops at the first match instead of collecting every
+ * sibling through `getBinaryNodeChildren`, which is what the vast majority of call sites
+ * want.
+ */
 export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: string) => {
-	return getBinaryNodeChildren(node, childTag)[0]
+	if (!node || !Array.isArray(node.content)) return undefined
+
+	for (const child of node.content) {
+		if (child.tag === childTag) {
+			return child
+		}
+	}
+
+	return undefined
 }
 
 export const getAllBinaryNodeChildren = ({ content }: BinaryNode) => {

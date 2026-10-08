@@ -985,7 +985,10 @@ export const makeSocket = (config: SocketConfig) => {
 	})
 
 	ws.on('CB:ib,,offline_preview', async (node: BinaryNode) => {
-		logger.info('offline preview received', JSON.stringify(node))
+		// Pass the node through instead of pre-stringifying: pino only serializes
+		// the payload when the level is actually enabled, and the JSON.stringify
+		// here ran for every offline preview regardless of log level.
+		logger.info({ node }, 'offline preview received')
 		await sendNode({
 			tag: 'ib',
 			attrs: {},

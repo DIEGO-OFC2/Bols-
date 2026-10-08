@@ -127,8 +127,29 @@ export const debouncedTimeout = (intervalMs = 1000, task?: () => void) => {
 
 export const delay = (ms: number) => delayCancellable(ms).delay
 
+/**
+ * Captures the caller stack lazily. Formatting `Error#stack` walks the entire call stack
+ * (measured ~6us vs ~2us for a bare `new Error()`), and the stack is only ever read when a
+ * timeout/cancel error is actually surfaced. The `Error` is created eagerly so the frames
+ * still point at the caller; only the string formatting is deferred. That keeps the success
+ * path — which is every `query` — free of the expensive half.
+ */
+const makeLazyStack = () => {
+	const error = new Error()
+	let captured: string | undefined
+	let done = false
+	return () => {
+		if (!done) {
+			captured = error.stack
+			done = true
+		}
+
+		return captured
+	}
+}
+
 export const delayCancellable = (ms: number) => {
-	const stack = new Error().stack
+	const getStack = makeLazyStack()
 	let timeout: NodeJS.Timeout
 	let reject: (error: any) => void
 	const delay: Promise<void> = new Promise((resolve, _reject) => {
@@ -141,7 +162,7 @@ export const delayCancellable = (ms: number) => {
 			new Boom('Cancelled', {
 				statusCode: 500,
 				data: {
-					stack
+					stack: getStack()
 				}
 			})
 		)
@@ -158,7 +179,7 @@ export async function promiseTimeout<T>(
 		return new Promise(promise)
 	}
 
-	const stack = new Error().stack
+	const getStack = makeLazyStack()
 	// Create a promise that rejects in <ms> milliseconds
 	const { delay, cancel } = delayCancellable(ms)
 	const p = new Promise((resolve, reject) => {
@@ -168,7 +189,7 @@ export async function promiseTimeout<T>(
 					new Boom('Timed Out', {
 						statusCode: DisconnectReason.timedOut,
 						data: {
-							stack
+							stack: getStack()
 						}
 					})
 				)
