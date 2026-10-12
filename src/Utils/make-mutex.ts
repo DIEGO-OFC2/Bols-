@@ -1,30 +1,48 @@
 /**
  * Minimal async mutex, API-compatible with the parts of `async-mutex` this
  * package used (runExclusive / acquire / isLocked). Keeping it in-repo drops
- * the dependency; waiters are served in FIFO order through a promise chain.
+ * the dependency; waiters are served in FIFO order.
+ *
+ * `acquire` returns the release function directly when the lock is free, so the
+ * uncontended path (the common one: cache fills and per-key transactions are
+ * rarely concurrent) costs no promise machinery. Waiters are queued and resumed
+ * in order; every caller awaits the result, so the `() => void | Promise<...>`
+ * union is transparent to them.
  */
 export const createMutex = () => {
-	let tail: Promise<void> = Promise.resolve()
-	let pending = 0
+	let locked = false
+	const waiters: Array<() => void> = []
 
-	const acquire = async (): Promise<() => void> => {
-		let release!: () => void
-		const gate = new Promise<void>(resolve => {
-			release = resolve
-		})
-		const prev = tail
-		tail = prev.then(() => gate)
-		pending++
-
-		await prev
-
-		let released = false
-		return () => {
-			if (released) return
-			released = true
-			pending--
-			release()
+	const unlock = () => {
+		const next = waiters.shift()
+		if (next) {
+			next()
+		} else {
+			locked = false
 		}
+	}
+
+	const acquire = (): (() => void) | Promise<() => void> => {
+		if (!locked) {
+			locked = true
+			let done = false
+			return () => {
+				if (done) return
+				done = true
+				unlock()
+			}
+		}
+
+		return new Promise<() => void>(resolve => {
+			waiters.push(() => {
+				let done = false
+				resolve(() => {
+					if (done) return
+					done = true
+					unlock()
+				})
+			})
+		})
 	}
 
 	return {
@@ -38,7 +56,7 @@ export const createMutex = () => {
 			}
 		},
 		isLocked(): boolean {
-			return pending > 0
+			return locked
 		}
 	}
 }

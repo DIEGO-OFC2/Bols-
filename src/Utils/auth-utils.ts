@@ -49,45 +49,68 @@ export function makeCacheableSignalKeyStore(
 
 	return {
 		async get(type, ids) {
-			return cacheMutex.runExclusive(async () => {
-				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
-				const idsToFetch: string[] = []
+			const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
+			const idsToFetch: string[] = []
 
-				if (ids.length === 1) {
-					// Dominant case on the decrypt path (single session/sender-key read):
-					// a direct get avoids the key-array + mget result object the bulk
-					// path allocates.
-					const id = ids[0]!
-					const key = getUniqueId(type, id)
-					const item = (await cache.get<SignalDataTypeMap[typeof type]>(key)) as any
+			// Cache hits are the dominant decrypt-path case and are pure reads
+			// (LRU lookup, no mutation), so serve them without taking the mutex.
+			// Serialising them added ~3 microtask hops per read and made every
+			// concurrent decrypt queue behind every other one.
+			if (ids.length === 1) {
+				// Dominant case on the decrypt path (single session/sender-key read):
+				// a direct get avoids the key-array + mget result object the bulk
+				// path allocates.
+				const id = ids[0]!
+				const key = getUniqueId(type, id)
+				const item = (await cache.get<SignalDataTypeMap[typeof type]>(key)) as any
+				if (typeof item !== 'undefined') {
+					data[id] = item
+				} else {
+					idsToFetch.push(id)
+				}
+			} else {
+				// Batch the cache lookup through `mget` when the store supports it:
+				// one call instead of an `await` per id, which on the per-message
+				// decrypt path (session + prekey reads) is a microtask hop each.
+				const keys = ids.map(id => getUniqueId(type, id))
+				const cached = cache.mget ? await cache.mget<SignalDataTypeMap[typeof type]>(keys) : undefined
+
+				for (let i = 0; i < ids.length; i++) {
+					const id = ids[i]!
+					const item = (cached ? cached[keys[i]!] : await cache.get<SignalDataTypeMap[typeof type]>(keys[i]!)) as any
 					if (typeof item !== 'undefined') {
 						data[id] = item
 					} else {
 						idsToFetch.push(id)
 					}
-				} else {
-					// Batch the cache lookup through `mget` when the store supports it:
-					// one call instead of an `await` per id, which on the per-message
-					// decrypt path (session + prekey reads) is a microtask hop each.
-					const keys = ids.map(id => getUniqueId(type, id))
-					const cached = cache.mget ? await cache.mget<SignalDataTypeMap[typeof type]>(keys) : undefined
+				}
+			}
 
-					for (let i = 0; i < ids.length; i++) {
-						const id = ids[i]!
-						const item = (cached ? cached[keys[i]!] : await cache.get<SignalDataTypeMap[typeof type]>(keys[i]!)) as any
+			if (idsToFetch.length) {
+				// Only a miss touches the backing store, so take the mutex here: it
+				// collapses concurrent misses for the same key into a single store
+				// read instead of a thundering herd.
+				await cacheMutex.runExclusive(async () => {
+					const stillMissing: string[] = []
+					for (const id of idsToFetch) {
+						const key = getUniqueId(type, id)
+						const item = (await cache.get<SignalDataTypeMap[typeof type]>(key)) as any
 						if (typeof item !== 'undefined') {
+							// filled by a concurrent reader while we waited
 							data[id] = item
 						} else {
-							idsToFetch.push(id)
+							stillMissing.push(id)
 						}
 					}
-				}
 
-				if (idsToFetch.length) {
-					logger?.trace({ items: idsToFetch.length }, 'loading from store')
-					const fetched = await store.get(type, idsToFetch)
+					if (!stillMissing.length) {
+						return
+					}
+
+					logger?.trace({ items: stillMissing.length }, 'loading from store')
+					const fetched = await store.get(type, stillMissing)
 					const toCache: { key: string; value: SignalDataTypeMap[keyof SignalDataTypeMap] }[] = []
-					for (const id of idsToFetch) {
+					for (const id of stillMissing) {
 						const item = fetched[id]
 						if (item) {
 							data[id] = item
@@ -108,10 +131,10 @@ export function makeCacheableSignalKeyStore(
 							}
 						}
 					}
-				}
+				})
+			}
 
-				return data
-			})
+			return data
 		},
 		async set(data) {
 			return cacheMutex.runExclusive(async () => {
