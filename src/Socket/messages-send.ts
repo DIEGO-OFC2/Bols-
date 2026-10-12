@@ -1281,6 +1281,7 @@ export const makeMessagesSocket = (config: SocketConfig) => {
 			userDevicesCache.close()
 		}
 
+		groupMetadataCache.close()
 		mediaConn = undefined
 		if (messageRetryManager) {
 			messageRetryManager.clear()
