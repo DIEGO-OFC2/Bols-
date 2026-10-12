@@ -523,17 +523,22 @@ export const makeSocket = (config: SocketConfig) => {
 			}
 		}
 
-		// Add timeout protection
+		// Add timeout protection. The timer must be cleared once the race settles:
+		// uploads usually finish in well under the timeout, and leaving the pending
+		// timer (plus its rejection closure) alive for the full UPLOAD_TIMEOUT window
+		// on every PreKeyLow notification is a slow leak.
+		let uploadTimeout: NodeJS.Timeout | undefined
 		uploadPreKeysPromise = Promise.race([
 			uploadLogic(0),
-			new Promise<void>((_, reject) =>
-				setTimeout(() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })), UPLOAD_TIMEOUT)
-			)
+			new Promise<void>((_, reject) => {
+				uploadTimeout = setTimeout(() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })), UPLOAD_TIMEOUT)
+			})
 		])
 
 		try {
 			await uploadPreKeysPromise
 		} finally {
+			clearTimeout(uploadTimeout)
 			uploadPreKeysPromise = null
 		}
 	}
