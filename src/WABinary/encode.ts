@@ -304,23 +304,27 @@ const encodeBinaryNodeInner = ({ tag, attrs, content }: BinaryNode, opts: Encode
 		throw new Error('Invalid node: tag cannot be undefined')
 	}
 
-	const attrKeys = attrs ? Object.keys(attrs) : []
+	// for..in (over Object.keys) avoids materialising a key array for every node;
+	// attrs are plain objects built by the decoder/message code, never class instances.
 	let attrCount = 0
-	for (let i = 0; i < attrKeys.length; i++) {
-		if (typeof attrs[attrKeys[i]!] === 'string') {
-			attrCount++
+	if (attrs) {
+		for (const key in attrs) {
+			if (typeof attrs[key] === 'string') {
+				attrCount++
+			}
 		}
 	}
 
 	writeListStart(writer, TAGS, 2 * attrCount + 1 + (typeof content !== 'undefined' ? 1 : 0))
 	writeString(writer, opts, tag)
 
-	for (let i = 0; i < attrKeys.length; i++) {
-		const key = attrKeys[i]!
-		const value = attrs[key]
-		if (typeof value === 'string') {
-			writeString(writer, opts, key)
-			writeString(writer, opts, value)
+	if (attrs) {
+		for (const key in attrs) {
+			const value = attrs[key]
+			if (typeof value === 'string') {
+				writeString(writer, opts, key)
+				writeString(writer, opts, value)
+			}
 		}
 	}
 
@@ -330,12 +334,30 @@ const encodeBinaryNodeInner = ({ tag, attrs, content }: BinaryNode, opts: Encode
 		writeByteLength(writer, TAGS, content.length)
 		pushBytes(writer, content)
 	} else if (Array.isArray(content)) {
-		const validContent = content.filter(
-			item => item && (item.tag || Buffer.isBuffer(item) || item instanceof Uint8Array || typeof item === 'string')
-		)
-		writeListStart(writer, TAGS, validContent.length)
-		for (const item of validContent) {
-			encodeBinaryNodeInner(item, opts, writer)
+		// Count valid children up-front without allocating the filtered array: the
+		// common case (a freshly built stanza) is all-valid, so this skips a
+		// throwaway array and closure on every node that has children.
+		let validCount = 0
+		let hasInvalid = false
+		for (const item of content) {
+			if (item && (item.tag || Buffer.isBuffer(item) || item instanceof Uint8Array || typeof item === 'string')) {
+				validCount++
+			} else {
+				hasInvalid = true
+			}
+		}
+
+		writeListStart(writer, TAGS, validCount)
+		if (hasInvalid) {
+			for (const item of content) {
+				if (item && (item.tag || Buffer.isBuffer(item) || item instanceof Uint8Array || typeof item === 'string')) {
+					encodeBinaryNodeInner(item, opts, writer)
+				}
+			}
+		} else {
+			for (const item of content) {
+				encodeBinaryNodeInner(item, opts, writer)
+			}
 		}
 	} else if (typeof content === 'undefined') {
 		// do nothing
