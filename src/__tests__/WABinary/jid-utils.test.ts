@@ -62,4 +62,21 @@ describe('jidNormalizedUser', () => {
 	it('returns an empty string for an undecodable jid', () => {
 		expect(jidNormalizedUser('no-at-sign')).toBe('')
 	})
+
+	it('returns an already-normalised jid unchanged', () => {
+		for (const jid of [
+			'15551234567@s.whatsapp.net',
+			'123456789012345@lid',
+			'120363000000000000@g.us',
+			'status@broadcast'
+		]) {
+			expect(jidNormalizedUser(jid)).toBe(jid)
+		}
+	})
+
+	it('still normalises device, agent and c.us variants', () => {
+		expect(jidNormalizedUser('15551234567:5@s.whatsapp.net')).toBe('15551234567@s.whatsapp.net')
+		expect(jidNormalizedUser('15551234567_1@s.whatsapp.net')).toBe('15551234567@s.whatsapp.net')
+		expect(jidNormalizedUser('15551234567@c.us')).toBe('15551234567@s.whatsapp.net')
+	})
 })
