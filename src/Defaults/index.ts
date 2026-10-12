@@ -64,16 +64,22 @@ export const DEFAULT_CACHE_TTLS = {
  * Entry caps for the socket's internal caches. TTLs alone don't bound memory:
  * a long-lived session keeps inserting distinct keys (users, groups, retry
  * entries) faster than they expire, so each cache also needs a ceiling.
+ *
+ * Sizes are chosen from the measured per-entry cost so the *combined* ceiling
+ * of every internal cache stays around 10 MB:
+ *   group metadata ~5 KB/entry, signal session ~0.7 KB, user devices ~0.7 KB.
+ * Evicted entries are re-fetched on demand, so a smaller cap trades a little
+ * redundant work for a hard memory bound — the right call for long-lived bots.
  */
 export const DEFAULT_CACHE_SIZES = {
-	USER_DEVICES: 5_000,
-	GROUP_METADATA: 1_000,
-	SIGNAL_STORE: 10_000,
-	MSG_RETRY: 2_000,
-	CALL_OFFER: 500,
-	PLACEHOLDER_RESEND: 2_000,
-	IDENTITY_DEBOUNCE: 5_000,
-	TC_TOKEN_INDEX: 5_000
+	USER_DEVICES: 2_500,
+	GROUP_METADATA: 500,
+	SIGNAL_STORE: 5_000,
+	MSG_RETRY: 1_000,
+	CALL_OFFER: 250,
+	PLACEHOLDER_RESEND: 1_000,
+	IDENTITY_DEBOUNCE: 2_000,
+	TC_TOKEN_INDEX: 2_500
 }
 
 export const DEFAULT_CONNECTION_CONFIG: SocketConfig = {

@@ -74,7 +74,10 @@ type BaileysBufferableEventEmitter = BaileysEventEmitter & {
  */
 export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter => {
 	const ev = new EventEmitter()
-	const MAX_HISTORY_CACHE_SIZE = 10000 // Bound the history cache; LRU eviction keeps the newest entries
+	// Bounds the history-sync dedup set; LRU eviction keeps the newest entries.
+	// The buffered history maps are keyed by chat/contact/message id, so an evicted
+	// key only causes redundant absorption work, never a duplicate emit.
+	const MAX_HISTORY_CACHE_SIZE = 5000
 	const historyCache = makeCappedSet(MAX_HISTORY_CACHE_SIZE)
 
 	let data = makeBufferData()

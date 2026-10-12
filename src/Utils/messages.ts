@@ -773,9 +773,15 @@ export const generateWAMessage = async (jid: string, content: AnyMessageContent,
 /** Get the key to access the true type of content */
 export const getContentType = (content: proto.IMessage | undefined) => {
 	if (content) {
-		const keys = Object.keys(content)
-		const key = keys.find(k => (k === 'conversation' || k.includes('Message')) && k !== 'senderKeyDistributionMessage')
-		return key as keyof typeof content
+		// Iterate own keys directly: `Object.keys().find()` allocates the key array
+		// plus a closure on every call, and this runs once per message during
+		// history sync. The for..in loop is allocation-free and returns on the
+		// first match, which is what `find` did anyway.
+		for (const k in content) {
+			if ((k === 'conversation' || k.includes('Message')) && k !== 'senderKeyDistributionMessage') {
+				return k as keyof typeof content
+			}
+		}
 	}
 }
 
@@ -785,6 +791,20 @@ export const getContentType = (content: proto.IMessage | undefined) => {
  * @param content
  * @returns
  */
+const getFutureProofMessage = (message: WAMessageContent | null | undefined) => {
+	return (
+		message?.ephemeralMessage ||
+		message?.viewOnceMessage ||
+		message?.documentWithCaptionMessage ||
+		message?.viewOnceMessageV2 ||
+		message?.viewOnceMessageV2Extension ||
+		message?.editedMessage ||
+		message?.associatedChildMessage ||
+		message?.groupStatusMessage ||
+		message?.groupStatusMessageV2
+	)
+}
+
 export const normalizeMessageContent = (content: WAMessageContent | null | undefined): WAMessageContent | undefined => {
 	if (!content) {
 		return undefined
@@ -801,20 +821,6 @@ export const normalizeMessageContent = (content: WAMessageContent | null | undef
 	}
 
 	return content!
-
-	function getFutureProofMessage(message: typeof content) {
-		return (
-			message?.ephemeralMessage ||
-			message?.viewOnceMessage ||
-			message?.documentWithCaptionMessage ||
-			message?.viewOnceMessageV2 ||
-			message?.viewOnceMessageV2Extension ||
-			message?.editedMessage ||
-			message?.associatedChildMessage ||
-			message?.groupStatusMessage ||
-			message?.groupStatusMessageV2
-		)
-	}
 }
 
 /**
