@@ -54,6 +54,7 @@ Node Ōēź 20 (enforced by `engines` and `preinstall`).
 | Unit + integration tests | `yarn test` |
 | End-to-end tests | `yarn test:e2e` (requires the bartender mock server, see below) |
 | Run the example | `yarn example` |
+| Benchmark vs upstream | `yarn bench [path-to-upstream-checkout]` |
 | Regenerate protobufs | `yarn gen:protobuf` |
 | Audit deps | `yarn npm audit --recursive` |
 

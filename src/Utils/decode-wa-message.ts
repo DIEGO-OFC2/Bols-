@@ -162,22 +162,26 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 	const isMe = (jid: string) => areJidsSameUser(jid, meId)
 	const isMeLid = (jid: string) => areJidsSameUser(jid, meLid)
 
+	// `areJidsSameUser` parses both JIDs; `from` is compared against me/LID and
+	// `isJidBroadcast(from)` is read again for the full message, so derive each
+	// once instead of re-parsing per branch.
+	const fromIsMe = isMe(from) || isMeLid(from)
+	const fromIsBroadcast = isJidBroadcast(from)
+
 	if (isPnUser(from) || isLidUser(from) || isHostedLidUser(from) || isHostedPnUser(from)) {
 		if (recipient && !isJidMetaAI(recipient)) {
-			if (!isMe(from) && !isMeLid(from)) {
+			if (!fromIsMe) {
 				throw new Boom('receipient present, but msg not from me', { data: stanza })
 			}
 
-			if (isMe(from) || isMeLid(from)) {
-				fromMe = true
-			}
+			fromMe = true
 
 			chatId = recipient
 		} else {
 			// Peer-routed self stanzas (history sync, app-state sync, etc.) arrive
 			// with `from` set to our own device but no `recipient` attribute —
 			// still mark as fromMe so self-only protocolMessage handlers run.
-			if (isMe(from) || isMeLid(from)) {
+			if (fromIsMe) {
 				fromMe = true
 			}
 
@@ -198,7 +202,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		msgType = 'group'
 		author = participant
 		chatId = from
-	} else if (isJidBroadcast(from)) {
+	} else if (fromIsBroadcast) {
 		if (!participant) {
 			throw new Boom('No participant in group message')
 		}
@@ -218,7 +222,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		chatId = from
 		author = from
 
-		if (isMe(from) || isMeLid(from)) {
+		if (fromIsMe) {
 			fromMe = true
 		}
 	} else {
@@ -226,17 +230,18 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 	}
 
 	const pushname = stanza?.attrs?.notify
+	const chatIsGroup = isJidGroup(chatId)
 
 	const key: WAMessageKey = {
 		remoteJid: chatId,
-		remoteJidAlt: !isJidGroup(chatId) ? addressingContext.senderAlt : undefined,
-		remoteJidUsername: !isJidGroup(chatId)
+		remoteJidAlt: !chatIsGroup ? addressingContext.senderAlt : undefined,
+		remoteJidUsername: !chatIsGroup
 			? stanza.attrs.peer_recipient_username || stanza.attrs.recipient_username
 			: undefined,
 		fromMe,
 		id: msgId,
 		participant,
-		participantAlt: isJidGroup(chatId) ? addressingContext.senderAlt : undefined,
+		participantAlt: chatIsGroup ? addressingContext.senderAlt : undefined,
 		participantUsername: stanza.attrs.participant ? stanza.attrs.participant_username : undefined,
 		addressingMode: addressingContext.addressingMode,
 		...(msgType === 'newsletter' && stanza.attrs.server_id ? { server_id: stanza.attrs.server_id } : {})
@@ -247,7 +252,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		category: stanza.attrs.category,
 		messageTimestamp: +stanza.attrs.t!,
 		pushName: pushname,
-		broadcast: isJidBroadcast(from)
+		broadcast: fromIsBroadcast
 	}
 
 	if (key.fromMe) {
