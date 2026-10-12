@@ -106,15 +106,15 @@ export const jidDecode = (jid: string | undefined): FullJid | undefined => {
 	}
 }
 
-/** the user portion of a jid, or undefined when there is no `@` */
-const jidUser = (jid: string | undefined): string | undefined => {
+/** end offset of the user portion of a jid, or -1 when there is no `@` */
+const jidUserEnd = (jid: string | undefined): number => {
 	if (typeof jid !== 'string') {
-		return undefined
+		return -1
 	}
 
 	const at = jid.indexOf('@')
 	if (at < 0) {
-		return undefined
+		return -1
 	}
 
 	const colon = jid.indexOf(':')
@@ -128,7 +128,7 @@ const jidUser = (jid: string | undefined): string | undefined => {
 		end = underscore
 	}
 
-	return jid.slice(0, end)
+	return end
 }
 
 /** is the jid a user */
@@ -137,8 +137,26 @@ export const areJidsSameUser = (jid1: string | undefined, jid2: string | undefin
 		return true
 	}
 
-	// both sides without a user portion compare equal (undefined === undefined)
-	return jidUser(jid1) === jidUser(jid2)
+	const end1 = jidUserEnd(jid1)
+	const end2 = jidUserEnd(jid2)
+	// both sides without a user portion compare equal
+	if (end1 !== end2) {
+		return false
+	}
+
+	if (end1 < 0) {
+		return true
+	}
+
+	// Compare the user portions in place instead of slicing two substrings per
+	// call — this runs several times per message on the receive path.
+	for (let i = 0; i < end1; i++) {
+		if (jid1!.charCodeAt(i) !== jid2!.charCodeAt(i)) {
+			return false
+		}
+	}
+
+	return true
 }
 
 /** is the jid Meta AI */
