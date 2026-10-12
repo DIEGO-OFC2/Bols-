@@ -531,7 +531,10 @@ export const makeSocket = (config: SocketConfig) => {
 		uploadPreKeysPromise = Promise.race([
 			uploadLogic(0),
 			new Promise<void>((_, reject) => {
-				uploadTimeout = setTimeout(() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })), UPLOAD_TIMEOUT)
+				uploadTimeout = setTimeout(
+					() => reject(new Boom('Pre-key upload timeout', { statusCode: 408 })),
+					UPLOAD_TIMEOUT
+				)
 			})
 		])
 
