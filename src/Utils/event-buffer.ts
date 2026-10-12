@@ -8,6 +8,7 @@ import type {
 	Chat,
 	ChatUpdate,
 	Contact,
+	MessageUpsertType,
 	WAMessage,
 	WAMessageKey
 } from '../Types'
@@ -78,6 +79,13 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 
 	let data = makeBufferData()
 	let isBuffering = false
+	/**
+	 * Type of the first buffered message upsert. Reading it back from the map
+	 * means an O(n) scan of `messageUpserts` on every emit, so a history-sync
+	 * burst of n upserts cost O(n^2). Tracked here in O(1) instead, and
+	 * recomputed only if the first key is deleted.
+	 */
+	const firstUpsert: { key?: string; type?: MessageUpsertType } = {}
 	let bufferTimeout: NodeJS.Timeout | null = null
 	let flushPendingTimeout: NodeJS.Timeout | null = null // Add a specific timer for the debounced flush to prevent leak
 	let bufferCount = 0
@@ -149,6 +157,8 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 		}
 
 		data = newData
+		firstUpsert.key = undefined
+		firstUpsert.type = undefined
 
 		logger.trace({ conditionalChatUpdatesLeft }, 'released buffered events')
 
@@ -171,14 +181,7 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			// If so, flush the buffered messages first to avoid type overshadowing
 			if (event === 'messages.upsert') {
 				const { type } = evData as BaileysEventMap['messages.upsert']
-				// Peek at the first buffered entry instead of materializing the whole
-				// array: `Object.values` here ran on every upsert, so a history-sync
-				// burst of N messages allocated N growing arrays (O(n^2) churn).
-				let bufferedType: BaileysEventMap['messages.upsert']['type'] | undefined
-				for (const key in data.messageUpserts) {
-					bufferedType = data.messageUpserts[key]!.type
-					break
-				}
+				const bufferedType = firstUpsert.type
 
 				if (bufferedType !== undefined && bufferedType !== type) {
 					logger.debug({ bufferedType, newType: type }, 'messages.upsert type mismatch, emitting buffered messages')
@@ -191,11 +194,13 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 					})
 					// Clear the message upserts from the buffer
 					data.messageUpserts = {}
+					firstUpsert.key = undefined
+					firstUpsert.type = undefined
 				}
 			}
 
 			if (isBuffering && BUFFERABLE_EVENT_SET.has(event)) {
-				append(data, historyCache, event as BufferableEvent, evData, logger)
+				append(data, historyCache, event as BufferableEvent, evData, logger, firstUpsert)
 				return true
 			}
 
@@ -253,6 +258,8 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			historyCache.clear()
 			// Reset buffer data
 			data = makeBufferData()
+			firstUpsert.key = undefined
+			firstUpsert.type = undefined
 			isBuffering = false
 			bufferCount = 0
 			// Remove all listeners
@@ -291,7 +298,8 @@ function append<E extends BufferableEvent>(
 	event: E,
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	eventData: any,
-	logger: ILogger
+	logger: ILogger,
+	firstUpsert: { key?: string; type?: MessageUpsertType }
 ) {
 	switch (event) {
 		case 'messaging-history.set':
@@ -510,6 +518,11 @@ function append<E extends BufferableEvent>(
 				if (data.historySets.messages[key]) {
 					data.historySets.messages[key] = message
 				} else {
+					if (firstUpsert.key === undefined) {
+						firstUpsert.key = key
+						firstUpsert.type = type === 'notify' ? 'notify' : type
+					}
+
 					data.messageUpserts[key] = {
 						message,
 						type: type === 'notify' || data.messageUpserts[key]?.type === 'notify' ? 'notify' : type
@@ -551,6 +564,12 @@ function append<E extends BufferableEvent>(
 
 					if (data.messageUpserts[keyStr]) {
 						delete data.messageUpserts[keyStr]
+						if (firstUpsert.key === keyStr) {
+							// the tracked first key went away; fall back to a rescan
+							const nextKey = Object.keys(data.messageUpserts)[0]
+							firstUpsert.key = nextKey
+							firstUpsert.type = nextKey ? data.messageUpserts[nextKey]!.type : undefined
+						}
 					}
 
 					if (data.messageUpdates[keyStr]) {
