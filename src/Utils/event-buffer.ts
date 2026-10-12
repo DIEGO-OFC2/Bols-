@@ -171,21 +171,26 @@ export const makeEventBuffer = (logger: ILogger): BaileysBufferableEventEmitter 
 			// If so, flush the buffered messages first to avoid type overshadowing
 			if (event === 'messages.upsert') {
 				const { type } = evData as BaileysEventMap['messages.upsert']
-				const existingUpserts = Object.values(data.messageUpserts)
-				if (existingUpserts.length > 0) {
-					const bufferedType = existingUpserts[0]!.type
-					if (bufferedType !== type) {
-						logger.debug({ bufferedType, newType: type }, 'messages.upsert type mismatch, emitting buffered messages')
-						// Emit the buffered messages with their correct type
-						ev.emit('event', {
-							'messages.upsert': {
-								messages: existingUpserts.map(m => m.message),
-								type: bufferedType
-							}
-						})
-						// Clear the message upserts from the buffer
-						data.messageUpserts = {}
-					}
+				// Peek at the first buffered entry instead of materializing the whole
+				// array: `Object.values` here ran on every upsert, so a history-sync
+				// burst of N messages allocated N growing arrays (O(n^2) churn).
+				let bufferedType: BaileysEventMap['messages.upsert']['type'] | undefined
+				for (const key in data.messageUpserts) {
+					bufferedType = data.messageUpserts[key]!.type
+					break
+				}
+
+				if (bufferedType !== undefined && bufferedType !== type) {
+					logger.debug({ bufferedType, newType: type }, 'messages.upsert type mismatch, emitting buffered messages')
+					// Emit the buffered messages with their correct type
+					ev.emit('event', {
+						'messages.upsert': {
+							messages: Object.values(data.messageUpserts).map(m => m.message),
+							type: bufferedType
+						}
+					})
+					// Clear the message upserts from the buffer
+					data.messageUpserts = {}
 				}
 			}
 
