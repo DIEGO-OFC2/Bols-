@@ -45,6 +45,13 @@ export const getBinaryNodeChildren = (node: BinaryNode | undefined, childTag: st
 export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: string) => {
 	if (!node || !Array.isArray(node.content)) return undefined
 
+	// Reuse the index when a sibling call already built it; otherwise fall through to
+	// the early-stop scan, so a missing tag stays O(n) instead of building a full index.
+	const cached = indexCache.get(node)?.get(childTag)
+	if (cached) {
+		return cached[0]
+	}
+
 	for (const child of node.content) {
 		if (child.tag === childTag) {
 			return child
