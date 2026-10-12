@@ -372,7 +372,9 @@ export const extractSyncdPatches = async (result: BinaryNode, options: RequestIn
 
 			let snapshot: proto.ISyncdSnapshot | undefined = undefined
 			if (snapshotNode && !!snapshotNode.content) {
-				if (!Buffer.isBuffer(snapshotNode)) {
+				// `snapshotNode` is a BinaryNode, never a Buffer, so the old guard was
+				// always true; keep only the actual conversion of the content array.
+				if (!Buffer.isBuffer(snapshotNode.content)) {
 					snapshotNode.content = Buffer.from(Object.values(snapshotNode.content))
 				}
 
