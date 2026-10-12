@@ -157,7 +157,15 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		throw new Boom('Invalid message stanza: missing from attribute', { data: stanza })
 	}
 
-	const addressingContext = extractAddressingContext(stanza)
+	// Recomputed inline rather than through `extractAddressingContext`: the only
+	// fields used below are addressingMode/senderAlt, so building the return
+	// object (plus recipientAlt) would be one throwaway allocation per message.
+	const addressingSender = participant || from
+	const addressingMode = stanza.attrs.addressing_mode || (addressingSender.endsWith('lid') ? 'lid' : 'pn')
+	const senderAlt =
+		addressingMode === 'lid'
+			? stanza.attrs.participant_pn || stanza.attrs.sender_pn || stanza.attrs.peer_recipient_pn
+			: stanza.attrs.participant_lid || stanza.attrs.sender_lid || stanza.attrs.peer_recipient_lid
 
 	// `areJidsSameUser` parses both JIDs; `from` is compared against me/LID and
 	// `isJidBroadcast(from)` is read again for the full message, so derive each
@@ -232,16 +240,16 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 
 	const key: WAMessageKey = {
 		remoteJid: chatId,
-		remoteJidAlt: !chatIsGroup ? addressingContext.senderAlt : undefined,
+		remoteJidAlt: !chatIsGroup ? senderAlt : undefined,
 		remoteJidUsername: !chatIsGroup
 			? stanza.attrs.peer_recipient_username || stanza.attrs.recipient_username
 			: undefined,
 		fromMe,
 		id: msgId,
 		participant,
-		participantAlt: chatIsGroup ? addressingContext.senderAlt : undefined,
+		participantAlt: chatIsGroup ? senderAlt : undefined,
 		participantUsername: stanza.attrs.participant ? stanza.attrs.participant_username : undefined,
-		addressingMode: addressingContext.addressingMode,
+		addressingMode: addressingMode,
 		...(msgType === 'newsletter' && stanza.attrs.server_id ? { server_id: stanza.attrs.server_id } : {})
 	}
 

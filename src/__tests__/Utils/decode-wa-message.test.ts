@@ -5,6 +5,7 @@ import type { BinaryNode } from '../../WABinary'
 const ME_ID = '5511999999999@s.whatsapp.net'
 const ME_LID = '111111111111111@lid'
 const PEER_ID = '5511888888888@s.whatsapp.net'
+const PEER_LID = '222222222222222@lid'
 const GROUP_ID = '120363000000000000@g.us'
 
 const message = (attrs: Record<string, string>): BinaryNode => ({
@@ -81,6 +82,34 @@ describe('decodeMessageNode', () => {
 			expect(result.fullMessage.key.remoteJid).toBe(GROUP_ID)
 			expect(result.fullMessage.key.participant).toBe(PEER_ID)
 			expect(result.author).toBe(PEER_ID)
+		})
+	})
+
+	describe('addressing context', () => {
+		it('derives senderAlt from the pn attribute for an LID-addressed message', () => {
+			const stanza = message({
+				id: 'MSG_LID',
+				from: PEER_LID,
+				participant_pn: PEER_ID,
+				addressing_mode: 'lid'
+			})
+			const result = decodeMessageNode(stanza, ME_ID, ME_LID)
+
+			expect(result.fullMessage.key.addressingMode).toBe('lid')
+			expect(result.fullMessage.key.remoteJidAlt).toBe(PEER_ID)
+		})
+
+		it('derives senderAlt from the lid attribute for a PN-addressed message', () => {
+			const stanza = message({
+				id: 'MSG_PN',
+				from: PEER_ID,
+				participant_lid: PEER_LID,
+				addressing_mode: 'pn'
+			})
+			const result = decodeMessageNode(stanza, ME_ID, ME_LID)
+
+			expect(result.fullMessage.key.addressingMode).toBe('pn')
+			expect(result.fullMessage.key.remoteJidAlt).toBe(PEER_LID)
 		})
 	})
 })
