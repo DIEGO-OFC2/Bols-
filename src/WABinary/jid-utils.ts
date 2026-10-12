@@ -165,6 +165,20 @@ const botRegexp = /^1313555\d{4}$|^131655500\d{2}$/
 export const isJidBot = (jid: string | undefined) => jid && botRegexp.test(jid.split('@')[0]!) && jid.endsWith('@c.us')
 
 export const jidNormalizedUser = (jid: string | undefined) => {
+	// Fast path: an already-normalised JID (no `:device`, no `_agent`, not a
+	// `@c.us` alias) round-trips through jidDecode+jidEncode unchanged. The
+	// decrypt path normalises remoteJid/participant per message, so skipping the
+	// decode object and the encode string for the common case is free savings.
+	if (
+		typeof jid === 'string' &&
+		jid.indexOf(':') < 0 &&
+		jid.indexOf('_') < 0 &&
+		jid.indexOf('@') >= 0 &&
+		!jid.endsWith('@c.us')
+	) {
+		return jid
+	}
+
 	const result = jidDecode(jid)
 	if (!result) {
 		return ''

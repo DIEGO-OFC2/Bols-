@@ -241,6 +241,30 @@ async function main() {
 		}
 	}
 
+	console.log('\n=== jidNormalizedUser (called several times per message) ===')
+	{
+		const N = 2_000_000
+		const { jidNormalizedUser } = await import('../src/WABinary/jid-utils')
+		const jids = [
+			'15551234567@s.whatsapp.net',
+			'123456789012345@lid',
+			'120363000000000000@g.us',
+			'1234:5@s.whatsapp.net'
+		]
+		const fork = await best(() => {
+			for (let i = 0; i < N; i++) jidNormalizedUser(jids[i % jids.length])
+		})
+		const upJid = await loadUpstream<any>('src/WABinary/jid-utils.ts')
+		if (upJid) {
+			const up = await best(() => {
+				for (let i = 0; i < N; i++) upJid.jidNormalizedUser(jids[i % jids.length])
+			})
+			row(`${N} calls`, up, fork)
+		} else {
+			console.log(`  fork ${fmt(fork)} for ${N} calls (upstream not available)`)
+		}
+	}
+
 	if (!upBuffer) {
 		console.log(
 			`\nSet up the upstream comparison with:\n` +
