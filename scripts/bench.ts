@@ -64,6 +64,7 @@ async function main() {
 	const { makeEventBuffer } = await import('../src/Utils/event-buffer')
 	const { encodeBinaryNode } = await import('../src/WABinary/encode')
 	const { decodeBinaryNode } = await import('../src/WABinary/decode')
+	const upEncode = await loadUpstream<any>('src/WABinary/encode.ts')
 	const { decodeMessageNode } = await import('../src/Utils/decode-wa-message')
 	const { getContentType, normalizeMessageContent } = await import('../src/Utils/messages')
 
@@ -89,6 +90,23 @@ async function main() {
 			row(`${N} upserts`, up, fork)
 		} else {
 			console.log(`  fork ${fmt(fork)} for ${N} upserts (upstream not available)`)
+		}
+	}
+
+	console.log('\n=== binary node encode (send hot path) ===')
+	{
+		const N = 20000
+		const nodes = Array.from({ length: N }, (_, i) => stanza(i))
+		const fork = await best(() => {
+			for (const n of nodes) encodeBinaryNode(n)
+		})
+		if (upEncode) {
+			const up = await best(() => {
+				for (const n of nodes) upEncode.encodeBinaryNode(n)
+			})
+			row(`${N} stanzas`, up, fork)
+		} else {
+			console.log(`  fork ${fmt(fork)} for ${N} stanzas (upstream not available)`)
 		}
 	}
 

@@ -45,6 +45,10 @@ class ByteWriter {
 		this.pos += bytes.length
 	}
 
+	reset() {
+		this.pos = 0
+	}
+
 	toBuffer(): Buffer {
 		return Buffer.from(this.buf.subarray(0, this.pos))
 	}
@@ -253,13 +257,17 @@ const writeString = (w: ByteWriter, opts: EncodeOpts, str?: string) => {
 		writePackedBytes(w, TAGS, str, 'nibble')
 	} else if (isHex(TAGS, str)) {
 		writePackedBytes(w, TAGS, str, 'hex')
-	} else {
+	} else if (str.indexOf('@') >= 0) {
+		// Only strings carrying a jid separator can decode as a jid; plain
+		// message text skips the decode scan entirely.
 		const decodedJid = jidDecode(str)
 		if (decodedJid) {
 			writeJid(w, opts, decodedJid)
 		} else {
 			writeStringRaw(w, TAGS, str)
 		}
+	} else {
+		writeStringRaw(w, TAGS, str)
 	}
 }
 
@@ -275,8 +283,15 @@ const writeListStart = (w: ByteWriter, TAGS: EncodeOpts['TAGS'], listSize: numbe
 	}
 }
 
+// Reused across calls: encoding is synchronous and non-reentrant (encrypted
+// payloads arrive pre-encoded), so one growable sink avoids a 4 KB allocation
+// per stanza on the send path. `toBuffer` still copies, so the returned buffer
+// never aliases the scratch.
+const sharedWriter = new ByteWriter()
+
 export const encodeBinaryNode = (node: BinaryNode, opts: EncodeOpts = constants): Buffer => {
-	const writer = new ByteWriter()
+	const writer = sharedWriter
+	writer.reset()
 	writer.pushByte(0)
 	encodeBinaryNodeInner(node, opts, writer)
 	return writer.toBuffer()

@@ -159,13 +159,11 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 
 	const addressingContext = extractAddressingContext(stanza)
 
-	const isMe = (jid: string) => areJidsSameUser(jid, meId)
-	const isMeLid = (jid: string) => areJidsSameUser(jid, meLid)
-
 	// `areJidsSameUser` parses both JIDs; `from` is compared against me/LID and
 	// `isJidBroadcast(from)` is read again for the full message, so derive each
-	// once instead of re-parsing per branch.
-	const fromIsMe = isMe(from) || isMeLid(from)
+	// once instead of re-parsing per branch. Call the helper directly rather than
+	// through per-call closures — this runs once per message on the receive path.
+	const fromIsMe = areJidsSameUser(from, meId) || areJidsSameUser(from, meLid)
 	const fromIsBroadcast = isJidBroadcast(from)
 
 	if (isPnUser(from) || isLidUser(from) || isHostedLidUser(from) || isHostedPnUser(from)) {
@@ -195,7 +193,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 			throw new Boom('No participant in group message')
 		}
 
-		if (isMe(participant) || isMeLid(participant)) {
+		if (areJidsSameUser(participant, meId) || areJidsSameUser(participant, meLid)) {
 			fromMe = true
 		}
 
@@ -207,7 +205,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 			throw new Boom('No participant in group message')
 		}
 
-		const isParticipantMe = isMe(participant)
+		const isParticipantMe = areJidsSameUser(participant, meId)
 		if (isJidStatusBroadcast(from)) {
 			msgType = isParticipantMe ? 'direct_peer_status' : 'other_status'
 		} else {
