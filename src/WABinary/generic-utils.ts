@@ -5,6 +5,10 @@ import { type BinaryNode } from './types'
 // some extra useful utilities
 
 const indexCache = new WeakMap<BinaryNode, Map<string, BinaryNode[]>>()
+// Separate per-tag memo for the single-child accessor. Caching the *found node*
+// (or a miss) makes repeated lookups O(1) without allocating a sibling array,
+// and keeps an early-stop scan for the first query on a fresh stanza.
+const childCache = new WeakMap<BinaryNode, Map<string, BinaryNode | null>>()
 
 /**
  * All children with the given tag. The per-tag index is built lazily and cached on
@@ -45,19 +49,25 @@ export const getBinaryNodeChildren = (node: BinaryNode | undefined, childTag: st
 export const getBinaryNodeChild = (node: BinaryNode | undefined, childTag: string) => {
 	if (!node || !Array.isArray(node.content)) return undefined
 
-	// Reuse the index when a sibling call already built it; otherwise fall through to
-	// the early-stop scan, so a missing tag stays O(n) instead of building a full index.
-	const cached = indexCache.get(node)?.get(childTag)
-	if (cached) {
-		return cached[0]
+	let memo = childCache.get(node)
+	if (memo) {
+		const hit = memo.get(childTag)
+		if (hit !== undefined) {
+			return hit ?? undefined
+		}
+	} else {
+		memo = new Map<string, BinaryNode | null>()
+		childCache.set(node, memo)
 	}
 
 	for (const child of node.content) {
 		if (child.tag === childTag) {
+			memo.set(childTag, child)
 			return child
 		}
 	}
 
+	memo.set(childTag, null)
 	return undefined
 }
 
