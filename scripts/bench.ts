@@ -259,6 +259,43 @@ async function main() {
 		}
 	}
 
+	console.log('\n=== LID mapping warm-cache lookup (per signal storage op) ===')
+	{
+		const N = 300_000
+		const { LIDMappingStore } = await import('../src/Signal/lid-mapping')
+		const backing = () => ({
+			get: async () => ({}),
+			set: async () => undefined,
+			transaction: async (work: () => unknown) => work(),
+			isInTransaction: () => false
+		})
+		const pns = Array.from({ length: 128 }, (_, i) => `1555123${i.toString().padStart(4, '0')}@s.whatsapp.net`)
+		const seed = (store: any) => {
+			for (const pn of pns) {
+				const user = pn.split('@')[0]
+				store.mappingCache.set(`pn:${user}`, `9${user}`)
+			}
+		}
+
+		const forkStore = new LIDMappingStore(backing() as any, logger)
+		seed(forkStore)
+		const fork = await best(async () => {
+			for (let i = 0; i < N; i++) await forkStore.getLIDForPN(pns[i % pns.length])
+		})
+
+		const upLid = await loadUpstream<any>('src/Signal/lid-mapping.ts')
+		if (upLid) {
+			const upStore = new upLid.LIDMappingStore(backing() as any, logger)
+			seed(upStore)
+			const up = await best(async () => {
+				for (let i = 0; i < N; i++) await upStore.getLIDForPN(pns[i % pns.length])
+			})
+			row(`${N} lookups`, up, fork)
+		} else {
+			console.log(`  fork ${fmt(fork)} for ${N} lookups (upstream not available)`)
+		}
+	}
+
 	console.log('\n=== jidNormalizedUser (called several times per message) ===')
 	{
 		const N = 2_000_000

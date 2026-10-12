@@ -106,11 +106,51 @@ export class LIDMappingStore {
 	}
 
 	async getLIDForPN(pn: string): Promise<string | null> {
+		// Hottest LID path: signal storage resolves one address per operation. Skip
+		// the single-element array, the getLIDsForPNs dispatch and the coalescing map
+		// when the mapping is warm.
+		const cached = this._getCachedLIDMapping(pn)
+		if (cached) return cached.lid
 		return (await this.getLIDsForPNs([pn]))?.[0]?.lid || null
+	}
+
+	/**
+	 * Resolve a single PN to its LID mapping using only the warm cache, without the
+	 * dedupe/inflight machinery. Returns undefined on a cache miss so the caller can
+	 * fall through to the full path.
+	 */
+	private _getCachedLIDMapping(pn: string): LIDMapping | undefined {
+		if (!isPnUser(pn) && !isHostedPnUser(pn)) {
+			return undefined
+		}
+
+		const decoded = jidDecode(pn)
+		if (!decoded?.user) {
+			return undefined
+		}
+
+		const lidUser = this.mappingCache.get(`pn:${decoded.user}`)
+		if (!lidUser || typeof lidUser !== 'string') {
+			return undefined
+		}
+
+		const pnDevice = decoded.device !== undefined ? decoded.device : 0
+		const deviceSpecificLid = `${lidUser}${pnDevice ? `:${pnDevice}` : ``}@${decoded.server === 'hosted' ? 'hosted.lid' : 'lid'}`
+		return { lid: deviceSpecificLid, pn }
 	}
 
 	async getLIDsForPNs(pns: string[]): Promise<LIDMapping[] | null> {
 		if (pns.length === 0) return null
+
+		// Fast path: a single PN whose mapping is already cached. The full path
+		// dedupes, sorts, joins a cache key and round-trips through the inflight
+		// coalescing map — all per-call overhead when the answer is one warm
+		// entry. resolveLIDSignalAddress calls with exactly one PN on every signal
+		// storage op, so this is the hot decrypt/encrypt shape.
+		if (pns.length === 1) {
+			const single = this._getCachedLIDMapping(pns[0]!)
+			if (single) return [single]
+		}
 
 		const sortedPns = [...new Set(pns)].sort()
 		const cacheKey = sortedPns.join(',')

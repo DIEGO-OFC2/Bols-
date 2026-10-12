@@ -44,4 +44,35 @@ describe('LIDMappingStore', () => {
 			expect(result).toBeNull()
 		})
 	})
+
+	describe('getLIDForPN warm-cache fast path', () => {
+		it('resolves a cached PN without touching the key store', async () => {
+			const store = lidMappingStore as any
+			store.mappingCache.set('pn:11111', '22222')
+
+			const result = await lidMappingStore.getLIDForPN('11111:0@s.whatsapp.net')
+
+			expect(result).toBe('22222@lid')
+			expect(mockKeys.get).not.toHaveBeenCalled()
+		})
+
+		it('preserves the device id of the queried PN in the mapped LID', async () => {
+			const store = lidMappingStore as any
+			store.mappingCache.set('pn:44444', '33333')
+
+			expect(await lidMappingStore.getLIDForPN('44444:7@s.whatsapp.net')).toBe('33333:7@lid')
+			expect(await lidMappingStore.getLIDForPN('44444@s.whatsapp.net')).toBe('33333@lid')
+		})
+
+		it('falls back to the full path (USync) on a cache miss', async () => {
+			// @ts-ignore
+			mockKeys.get.mockResolvedValue({} as SignalDataTypeMap['lid-mapping'])
+			mockPnToLIDFunc.mockResolvedValue([{ lid: '99999@lid', pn: '88888@s.whatsapp.net' }])
+
+			const result = await lidMappingStore.getLIDForPN('88888@s.whatsapp.net')
+
+			expect(result).toBe('99999@lid')
+			expect(mockPnToLIDFunc).toHaveBeenCalledWith(['88888@s.whatsapp.net'])
+		})
+	})
 })
