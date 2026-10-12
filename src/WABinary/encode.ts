@@ -117,42 +117,19 @@ const writeStringRaw = (w: ByteWriter, TAGS: EncodeOpts['TAGS'], str: string) =>
 	pushBytes(w, bytes)
 }
 
-const packNibble = (char: string) => {
-	switch (char) {
-		case '-':
-			return 10
-		case '.':
-			return 11
-		case '\0':
-			return 15
-		default:
-			if (char >= '0' && char <= '9') {
-				return char.charCodeAt(0) - '0'.charCodeAt(0)
-			}
+// Nibble/hex char -> 4-bit value, indexed by char code (0-255). 0xff marks an
+// invalid char. A table keeps the per-pair padding loop out of the two
+// `packX(char)` calls (each doing range checks) it used to make per input char.
+const NIBBLE_TABLE = new Uint8Array(256).fill(0xff)
+for (let c = 0x30; c <= 0x39; c++) NIBBLE_TABLE[c] = c - 0x30
+NIBBLE_TABLE[0x2d] = 10 // '-'
+NIBBLE_TABLE[0x2e] = 11 // '.'
+NIBBLE_TABLE[0x00] = 15 // '\0' padding
 
-			throw new Error(`invalid byte for nibble "${char}"`)
-	}
-}
-
-const packHex = (char: string) => {
-	if (char >= '0' && char <= '9') {
-		return char.charCodeAt(0) - '0'.charCodeAt(0)
-	}
-
-	if (char >= 'A' && char <= 'F') {
-		return 10 + char.charCodeAt(0) - 'A'.charCodeAt(0)
-	}
-
-	if (char >= 'a' && char <= 'f') {
-		return 10 + char.charCodeAt(0) - 'a'.charCodeAt(0)
-	}
-
-	if (char === '\0') {
-		return 15
-	}
-
-	throw new Error(`Invalid hex char "${char}"`)
-}
+const HEX_TABLE = new Uint8Array(256).fill(0xff)
+for (let c = 0x30; c <= 0x39; c++) HEX_TABLE[c] = c - 0x30
+for (let c = 0x41; c <= 0x46; c++) HEX_TABLE[c] = 10 + c - 0x41
+HEX_TABLE[0x00] = 15 // '\0' padding
 
 const writePackedBytes = (w: ByteWriter, TAGS: EncodeOpts['TAGS'], str: string, type: 'nibble' | 'hex') => {
 	if (str.length > TAGS.PACKED_MAX) {
@@ -167,53 +144,56 @@ const writePackedBytes = (w: ByteWriter, TAGS: EncodeOpts['TAGS'], str: string, 
 	}
 
 	w.pushByte(roundedLength)
-	const packFunction = type === 'nibble' ? packNibble : packHex
-
-	const packBytePair = (v1: string, v2: string) => {
-		const result = (packFunction(v1) << 4) | packFunction(v2)
-		return result
-	}
+	const pack = type === 'nibble' ? NIBBLE_TABLE : HEX_TABLE
 
 	const strLengthHalf = Math.floor(str.length / 2)
 	for (let i = 0; i < strLengthHalf; i++) {
-		w.pushByte(packBytePair(str[2 * i]!, str[2 * i + 1]!))
+		w.pushByte((pack[str.charCodeAt(2 * i)]! << 4) | pack[str.charCodeAt(2 * i + 1)]!)
 	}
 
 	if (str.length % 2 !== 0) {
-		w.pushByte(packBytePair(str[str.length - 1]!, '\x00'))
+		// last nibble in the high half, '\0' (value 15) in the low half
+		w.pushByte((pack[str.charCodeAt(str.length - 1)]! << 4) | 15)
 	}
 }
 
-const isNibble = (TAGS: EncodeOpts['TAGS'], str?: string) => {
+/**
+ * Decide how a string should be packed in a single character scan, preserving the
+ * `isNibble` then `isHex` precedence (a digits-only string packs as nibble). The
+ * two separate checks scanned most numeric strings twice; this visits each char
+ * once and bails as soon as neither packing is possible.
+ */
+const getPackedType = (TAGS: EncodeOpts['TAGS'], str?: string): 'nibble' | 'hex' | null => {
 	if (!str || str.length > TAGS.PACKED_MAX) {
-		return false
+		return null
 	}
 
+	let nibble = true
+	let hex = true
 	for (let i = 0; i < str.length; i++) {
-		const char = str[i]!
-		const isInNibbleRange = char >= '0' && char <= '9'
-		if (!isInNibbleRange && char !== '-' && char !== '.') {
-			return false
+		const c = str.charCodeAt(i)
+		if (c >= 48 && c <= 57) {
+			continue
+		}
+
+		if (c === 45 || c === 46) {
+			// '-' / '.' are nibble-only
+			hex = false
+		} else if (c >= 65 && c <= 70) {
+			// A-F are hex-only (upstream's isHex is case-sensitive: uppercase only)
+			nibble = false
+		} else {
+			return null
+		}
+
+		if (!nibble && !hex) {
+			return null
 		}
 	}
 
-	return true
-}
-
-const isHex = (TAGS: EncodeOpts['TAGS'], str?: string) => {
-	if (!str || str.length > TAGS.PACKED_MAX) {
-		return false
-	}
-
-	for (let i = 0; i < str.length; i++) {
-		const char = str[i]!
-		const isInNibbleRange = char >= '0' && char <= '9'
-		if (!isInNibbleRange && !(char >= 'A' && char <= 'F')) {
-			return false
-		}
-	}
-
-	return true
+	if (nibble) return 'nibble'
+	if (hex) return 'hex'
+	return null
 }
 
 const writeJid = (w: ByteWriter, opts: EncodeOpts, { domainType, device, user, server }: FullJid) => {
@@ -253,21 +233,23 @@ const writeString = (w: ByteWriter, opts: EncodeOpts, str?: string) => {
 		}
 
 		w.pushByte(tokenIndex.index)
-	} else if (isNibble(TAGS, str)) {
-		writePackedBytes(w, TAGS, str, 'nibble')
-	} else if (isHex(TAGS, str)) {
-		writePackedBytes(w, TAGS, str, 'hex')
-	} else if (str.indexOf('@') >= 0) {
-		// Only strings carrying a jid separator can decode as a jid; plain
-		// message text skips the decode scan entirely.
-		const decodedJid = jidDecode(str)
-		if (decodedJid) {
-			writeJid(w, opts, decodedJid)
+	} else {
+		// Single scan decides nibble vs hex (was two scans over most numeric strings).
+		const packed = getPackedType(TAGS, str)
+		if (packed) {
+			writePackedBytes(w, TAGS, str, packed)
+		} else if (str.indexOf('@') >= 0) {
+			// Only strings carrying a jid separator can decode as a jid; plain
+			// message text skips the decode scan entirely.
+			const decodedJid = jidDecode(str)
+			if (decodedJid) {
+				writeJid(w, opts, decodedJid)
+			} else {
+				writeStringRaw(w, TAGS, str)
+			}
 		} else {
 			writeStringRaw(w, TAGS, str)
 		}
-	} else {
-		writeStringRaw(w, TAGS, str)
 	}
 }
 
