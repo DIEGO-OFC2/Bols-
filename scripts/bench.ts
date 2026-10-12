@@ -207,40 +207,37 @@ async function main() {
 	{
 		const N = 20_000
 		const { makeCacheableSignalKeyStore } = await import('../src/Utils/auth-utils')
-
 		const backing = () => ({
 			get: async (_type: string, ids: string[]) => Object.fromEntries(ids.map(id => [id, { fake: id }])),
 			set: async () => undefined
 		})
+		const warm = Array.from({ length: 512 }, (_, i) => `u${i}`)
 
+		// single-id get is the decrypt-path shape: one session / one pre-key per call
 		const forkStore = makeCacheableSignalKeyStore(backing() as any, logger)
-		// warm the cache so the measured loop is the pure hit path
-		await forkStore.get(
-			'session',
-			Array.from({ length: 512 }, (_, i) => `u${i}`)
-		)
-
-		const fork = await best(async () => {
-			for (let i = 0; i < N; i++) {
-				await forkStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
-			}
+		await forkStore.get('session', warm)
+		const forkSingle = await best(async () => {
+			for (let i = 0; i < N; i++) await forkStore.get('session', [`u${i % 512}`])
 		})
 
 		const upAuth = await loadUpstream<any>('src/Utils/auth-utils.ts')
 		if (upAuth) {
 			const upStore = upAuth.makeCacheableSignalKeyStore(backing() as any, logger)
-			await upStore.get(
-				'session',
-				Array.from({ length: 512 }, (_, i) => `u${i}`)
-			)
-			const up = await best(async () => {
-				for (let i = 0; i < N; i++) {
-					await upStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
-				}
+			await upStore.get('session', warm)
+			const upSingle = await best(async () => {
+				for (let i = 0; i < N; i++) await upStore.get('session', [`u${i % 512}`])
 			})
-			row(`${N} cached gets`, up, fork)
+			row(`${N} single-id gets`, upSingle, forkSingle)
+
+			const forkBatch = await best(async () => {
+				for (let i = 0; i < N; i++) await forkStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
+			})
+			const upBatch = await best(async () => {
+				for (let i = 0; i < N; i++) await upStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
+			})
+			row(`${N} two-id gets`, upBatch, forkBatch)
 		} else {
-			console.log(`  fork ${fmt(fork)} for ${N} cached gets (upstream not available)`)
+			console.log(`  fork ${fmt(forkSingle)} for ${N} single-id gets (upstream not available)`)
 		}
 	}
 

@@ -53,19 +53,33 @@ export function makeCacheableSignalKeyStore(
 				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
 				const idsToFetch: string[] = []
 
-				// Batch the cache lookup through `mget` when the store supports it:
-				// one call instead of an `await` per id, which on the per-message
-				// decrypt path (session + prekey reads) is a microtask hop each.
-				const keys = ids.map(id => getUniqueId(type, id))
-				const cached = cache.mget ? await cache.mget<SignalDataTypeMap[typeof type]>(keys) : undefined
-
-				for (let i = 0; i < ids.length; i++) {
-					const id = ids[i]!
-					const item = (cached ? cached[keys[i]!] : await cache.get<SignalDataTypeMap[typeof type]>(keys[i]!)) as any
+				if (ids.length === 1) {
+					// Dominant case on the decrypt path (single session/sender-key read):
+					// a direct get avoids the key-array + mget result object the bulk
+					// path allocates.
+					const id = ids[0]!
+					const key = getUniqueId(type, id)
+					const item = (await cache.get<SignalDataTypeMap[typeof type]>(key)) as any
 					if (typeof item !== 'undefined') {
 						data[id] = item
 					} else {
 						idsToFetch.push(id)
+					}
+				} else {
+					// Batch the cache lookup through `mget` when the store supports it:
+					// one call instead of an `await` per id, which on the per-message
+					// decrypt path (session + prekey reads) is a microtask hop each.
+					const keys = ids.map(id => getUniqueId(type, id))
+					const cached = cache.mget ? await cache.mget<SignalDataTypeMap[typeof type]>(keys) : undefined
+
+					for (let i = 0; i < ids.length; i++) {
+						const id = ids[i]!
+						const item = (cached ? cached[keys[i]!] : await cache.get<SignalDataTypeMap[typeof type]>(keys[i]!)) as any
+						if (typeof item !== 'undefined') {
+							data[id] = item
+						} else {
+							idsToFetch.push(id)
+						}
 					}
 				}
 
