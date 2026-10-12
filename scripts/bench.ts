@@ -162,6 +162,88 @@ async function main() {
 		}
 	}
 
+	console.log('\n=== full read path (decode -> clean -> isReal -> normalize -> history) ===')
+	{
+		const N = 200_000
+		const nodes = Array.from({ length: N }, (_, i) => stanza(i))
+		const meId = '5511999999999@s.whatsapp.net'
+		const meLid = '123456789012345@lid'
+
+		const runFork = async () => {
+			const { cleanMessage, isRealMessage } = await import('../src/Utils/process-message')
+			const { getHistoryMsg } = await import('../src/Utils/history')
+			return best(() => {
+				for (const n of nodes) {
+					const { fullMessage } = decodeMessageNode(n, meId, meLid)
+					cleanMessage(fullMessage, meId, meLid)
+					isRealMessage(fullMessage)
+					normalizeMessageContent(fullMessage.message)
+					getHistoryMsg(fullMessage.message!)
+				}
+			})
+		}
+
+		const fork = await runFork()
+		const upProcess = await loadUpstream<any>('src/Utils/process-message.ts')
+		const upHistory = await loadUpstream<any>('src/Utils/history.ts')
+		if (upDecodeMsg && upProcess && upHistory) {
+			const up = await best(() => {
+				for (const n of nodes) {
+					const { fullMessage } = upDecodeMsg.decodeMessageNode(n, meId, meLid)
+					upProcess.cleanMessage(fullMessage, meId, meLid)
+					upProcess.isRealMessage(fullMessage)
+					upContentType.normalizeMessageContent(fullMessage.message)
+					upHistory.getHistoryMsg(fullMessage.message!)
+				}
+			})
+			row(`${N} messages`, up, fork)
+			console.log(`  -> ${((fork / N) * 1000).toFixed(3)} ms/msg on the fork (parsing + normalisation only)`)
+		} else {
+			console.log(`  fork ${fmt(fork)} for ${N} messages (upstream not available)`)
+		}
+	}
+
+	console.log('\n=== signal key store reads (cache hit path per decrypt) ===')
+	{
+		const N = 20_000
+		const { makeCacheableSignalKeyStore } = await import('../src/Utils/auth-utils')
+
+		const backing = () => ({
+			get: async (_type: string, ids: string[]) => Object.fromEntries(ids.map(id => [id, { fake: id }])),
+			set: async () => undefined
+		})
+
+		const forkStore = makeCacheableSignalKeyStore(backing() as any, logger)
+		// warm the cache so the measured loop is the pure hit path
+		await forkStore.get(
+			'session',
+			Array.from({ length: 512 }, (_, i) => `u${i}`)
+		)
+
+		const fork = await best(async () => {
+			for (let i = 0; i < N; i++) {
+				await forkStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
+			}
+		})
+
+		const upAuth = await loadUpstream<any>('src/Utils/auth-utils.ts')
+		if (upAuth) {
+			const upStore = upAuth.makeCacheableSignalKeyStore(backing() as any, logger)
+			await upStore.get(
+				'session',
+				Array.from({ length: 512 }, (_, i) => `u${i}`)
+			)
+			const up = await best(async () => {
+				for (let i = 0; i < N; i++) {
+					await upStore.get('session', [`u${i % 512}`, `u${(i + 1) % 512}`])
+				}
+			})
+			row(`${N} cached gets`, up, fork)
+		} else {
+			console.log(`  fork ${fmt(fork)} for ${N} cached gets (upstream not available)`)
+		}
+	}
+
 	if (!upBuffer) {
 		console.log(
 			`\nSet up the upstream comparison with:\n` +

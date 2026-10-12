@@ -4,7 +4,7 @@ import { randomBytes } from 'crypto'
 import { DEFAULT_CACHE_SIZES, DEFAULT_CACHE_TTLS } from '../Defaults'
 import type {
 	AuthenticationCreds,
-	CacheStore,
+	PossiblyExtendedCacheStore,
 	SignalDataSet,
 	SignalDataTypeMap,
 	SignalKeyStore,
@@ -36,7 +36,7 @@ interface TransactionContext {
 export function makeCacheableSignalKeyStore(
 	store: SignalKeyStore,
 	logger?: ILogger,
-	_cache?: CacheStore
+	_cache?: PossiblyExtendedCacheStore
 ): SignalKeyStore {
 	const cache = _cache || makeBoundedCache(DEFAULT_CACHE_SIZES.SIGNAL_STORE, DEFAULT_CACHE_TTLS.SIGNAL_STORE * 1000)
 
@@ -53,8 +53,15 @@ export function makeCacheableSignalKeyStore(
 				const data: { [_: string]: SignalDataTypeMap[typeof type] } = {}
 				const idsToFetch: string[] = []
 
-				for (const id of ids) {
-					const item = (await cache.get<SignalDataTypeMap[typeof type]>(getUniqueId(type, id))) as any
+				// Batch the cache lookup through `mget` when the store supports it:
+				// one call instead of an `await` per id, which on the per-message
+				// decrypt path (session + prekey reads) is a microtask hop each.
+				const keys = ids.map(id => getUniqueId(type, id))
+				const cached = cache.mget ? await cache.mget<SignalDataTypeMap[typeof type]>(keys) : undefined
+
+				for (let i = 0; i < ids.length; i++) {
+					const id = ids[i]!
+					const item = (cached ? cached[keys[i]!] : await cache.get<SignalDataTypeMap[typeof type]>(keys[i]!)) as any
 					if (typeof item !== 'undefined') {
 						data[id] = item
 					} else {
@@ -65,12 +72,26 @@ export function makeCacheableSignalKeyStore(
 				if (idsToFetch.length) {
 					logger?.trace({ items: idsToFetch.length }, 'loading from store')
 					const fetched = await store.get(type, idsToFetch)
+					const toCache: { key: string; value: SignalDataTypeMap[keyof SignalDataTypeMap] }[] = []
 					for (const id of idsToFetch) {
 						const item = fetched[id]
 						if (item) {
 							data[id] = item
-							// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
-							await cache.set(getUniqueId(type, id), item as SignalDataTypeMap[keyof SignalDataTypeMap])
+							toCache.push({
+								key: getUniqueId(type, id),
+								// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion
+								value: item as SignalDataTypeMap[keyof SignalDataTypeMap]
+							})
+						}
+					}
+
+					if (toCache.length) {
+						if (cache.mset) {
+							await cache.mset(toCache)
+						} else {
+							for (const { key, value } of toCache) {
+								await cache.set(key, value)
+							}
 						}
 					}
 				}
@@ -81,10 +102,22 @@ export function makeCacheableSignalKeyStore(
 		async set(data) {
 			return cacheMutex.runExclusive(async () => {
 				let keys = 0
+				const toCache: { key: string; value: SignalDataTypeMap[keyof SignalDataTypeMap] }[] = []
 				for (const type in data) {
 					for (const id in data[type as keyof SignalDataTypeMap]) {
-						await cache.set(getUniqueId(type, id), data[type as keyof SignalDataTypeMap]![id]!)
+						toCache.push({
+							key: getUniqueId(type, id),
+							value: data[type as keyof SignalDataTypeMap]![id]!
+						})
 						keys += 1
+					}
+				}
+
+				if (cache.mset) {
+					await cache.mset(toCache)
+				} else {
+					for (const { key, value } of toCache) {
+						await cache.set(key, value)
 					}
 				}
 
