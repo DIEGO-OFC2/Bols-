@@ -249,8 +249,13 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		participant,
 		participantAlt: chatIsGroup ? senderAlt : undefined,
 		participantUsername: stanza.attrs.participant ? stanza.attrs.participant_username : undefined,
-		addressingMode: addressingMode,
-		...(msgType === 'newsletter' && stanza.attrs.server_id ? { server_id: stanza.attrs.server_id } : {})
+		addressingMode
+	}
+
+	// Assign the rare newsletter-only field directly instead of spreading a
+	// conditional literal, which allocated a throwaway `{}` on every message.
+	if (msgType === 'newsletter' && stanza.attrs.server_id) {
+		key.server_id = stanza.attrs.server_id
 	}
 
 	const fullMessage: WAMessage = {
