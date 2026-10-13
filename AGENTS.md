@@ -317,3 +317,27 @@ Beyond the AI policy in `CODE_OF_CONDUCT.md`:
 - Security: see `SECURITY.md`
 
 If you're an agent and you're stuck on something this file doesn't cover, fall back to reading the relevant `src/` directory and the matching tests ŌĆö they're the source of truth.
+
+## Multi-socket / fleet notes
+
+When many sockets share one process (the `V3` bot fleet runs up to 600 subbots
+against this build), the per-socket defaults add up:
+
+- Measured with `makeWASocket` against a dead endpoint and a forced GC:
+  ~1.27 MB of `heapUsed` per idle socket (linear from 60 to 400 sockets).
+  `makeCacheableSignalKeyStore` is only ~160 KB of that; the bulk is per-socket
+  protobuf field arrays, native `ArrayBufferData` and socket internals, i.e. not
+  something a config flag can remove.
+- The cache entry caps in `Defaults/index.ts` (`DEFAULT_CACHE_SIZES`) bound each
+  caches full size, not just its TTL, so a long-lived fleet does not leak. At
+  full occupancy the per-socket caches still total ~10 MB, so a fleet should pass
+  shared `CacheStore` instances via the socket config where the key space allows.
+- Safe to share across sockets: `msgRetryCounterCache`, `callOfferCache`,
+  `placeholderResendCache` - keyed by globally unique message/call ids.
+- Never share the signal-key store cache: its keys are `type.id` where `id` is a
+  contact/group JID, so two different accounts would collide and decrypt with
+  each others session records. Each socket must keep its own bounded signal cache.
+- `useMultiFileAuthState` reads keys lazily (no bulk load into RAM) and ref-counts
+  its per-file locks, so many sessions in one process do not accumulate mutexes.
+- Sockets already call `setMaxListeners(0)` on their own emitter and register no
+  `process.on` handlers, so per-socket listener counts are not a scaling limit.
