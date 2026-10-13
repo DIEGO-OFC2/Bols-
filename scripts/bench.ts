@@ -93,6 +93,37 @@ async function main() {
 		}
 	}
 
+	console.log('\n=== messaging-history.set consolidation (real history-sync shape) ===')
+	{
+		const chats = Array.from({ length: 5000 }, (_, i) => ({
+			id: `1555123${(i % 9999).toString().padStart(4, '0')}@s.whatsapp.net`,
+			name: `Chat ${i}`,
+			unreadCount: i % 5
+		}))
+		const contacts = Array.from({ length: 20000 }, (_, i) => ({
+			id: `1555123${(i % 9999).toString().padStart(4, '0')}@s.whatsapp.net`,
+			notify: `Name ${i}`
+		}))
+		const histMessages = Array.from({ length: 20000 }, (_, i) => message(i))
+
+		const run = async (make: (l: unknown) => any) => {
+			const buf = make(logger)
+			return best(() => {
+				buf.buffer()
+				buf.emit('messaging-history.set', { chats, contacts, messages: histMessages, isLatest: true })
+				buf.flush()
+			})
+		}
+
+		const fork = await run(makeEventBuffer)
+		if (upBuffer) {
+			const up = await run(upBuffer.makeEventBuffer)
+			row(`${chats.length}+${contacts.length}+${histMessages.length} entries`, up, fork)
+		} else {
+			console.log(`  fork ${fmt(fork)} for history sync (upstream not available)`)
+		}
+	}
+
 	console.log('\n=== binary node encode (send hot path) ===')
 	{
 		const N = 20000

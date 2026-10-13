@@ -62,10 +62,51 @@ export const makeBoundedCache = (max: number, ttlMs: number): BoundedCacheStore 
  * A TTL- and entry-capped string set.
  *
  * `Set` has no eviction strategy, so a long-lived session that keeps inserting
- * distinct keys holds every one of them for the process lifetime. Pairing a
- * `Set` with an LRU cap keeps membership O(1) while the cap bounds memory.
+ * distinct keys holds every one of them for the process lifetime. The cap bounds
+ * that memory: with a TTL an LRU is used (it can expire entries lazily), and
+ * without one a native Set is reset wholesale when it passes the cap.
  */
 export const makeCappedSet = (max: number, ttlMs = 0) => {
+	// No TTL means a pure membership structure (the event-buffer dedup set), which
+	// is exactly what a native Set gives us. The LRU alternative pays an object
+	// allocation, a Map bookkeeping update and an eviction-list splice on every
+	// add/has; on a large history sync (tens of thousands of chats/contacts/
+	// messages) that dominated the whole consolidation. Reset the Set wholesale
+	// once it passes the cap: `clear` is O(n) but amortised over `max` inserts it
+	// is O(1) per insert, and a key that falls out of the set only causes
+	// redundant absorption work downstream, never a dropped or duplicated event.
+	if (ttlMs <= 0) {
+		const live = new Set<string>()
+
+		return {
+			add(key: string): void {
+				if (live.size >= max) {
+					live.clear()
+				}
+
+				live.add(key)
+			},
+			has(key: string): boolean {
+				return live.has(key)
+			},
+			delete(key: string): void {
+				live.delete(key)
+			},
+			clear(): void {
+				live.clear()
+			},
+			get size(): number {
+				return live.size
+			},
+			values(): IterableIterator<string> {
+				return live.values()
+			},
+			[Symbol.iterator](): IterableIterator<string> {
+				return live.values()
+			}
+		}
+	}
+
 	const store = new LRUCache<string, true>({ max, ttl: ttlMs })
 
 	return {

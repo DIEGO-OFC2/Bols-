@@ -167,14 +167,14 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 			? stanza.attrs.participant_pn || stanza.attrs.sender_pn || stanza.attrs.peer_recipient_pn
 			: stanza.attrs.participant_lid || stanza.attrs.sender_lid || stanza.attrs.peer_recipient_lid
 
-	// `areJidsSameUser` parses both JIDs; `from` is compared against me/LID and
-	// `isJidBroadcast(from)` is read again for the full message, so derive each
-	// once instead of re-parsing per branch. Call the helper directly rather than
-	// through per-call closures — this runs once per message on the receive path.
-	const fromIsMe = areJidsSameUser(from, meId) || areJidsSameUser(from, meLid)
+	// `isJidBroadcast` is a cheap suffix test that always ends up on the message,
+	// but `fromIsMe` costs two `areJidsSameUser` scans and is only consulted by the
+	// peer/self and newsletter branches — derive that one lazily below so group and
+	// broadcast stanzas do not pay for it on every message.
 	const fromIsBroadcast = isJidBroadcast(from)
 
 	if (isPnUser(from) || isLidUser(from) || isHostedLidUser(from) || isHostedPnUser(from)) {
+		const fromIsMe = areJidsSameUser(from, meId) || areJidsSameUser(from, meLid)
 		if (recipient && !isJidMetaAI(recipient)) {
 			if (!fromIsMe) {
 				throw new Boom('receipient present, but msg not from me', { data: stanza })
@@ -228,7 +228,7 @@ export function decodeMessageNode(stanza: BinaryNode, meId: string, meLid: strin
 		chatId = from
 		author = from
 
-		if (fromIsMe) {
+		if (areJidsSameUser(from, meId) || areJidsSameUser(from, meLid)) {
 			fromMe = true
 		}
 	} else {
