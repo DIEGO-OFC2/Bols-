@@ -115,6 +115,8 @@ export async function getMediaKeys(
 }
 
 /** Extracts video thumb using FFMPEG */
+const VIDEO_THUMB_TIMEOUT_MS = 15_000
+
 const extractVideoThumb = async (
 	path: string,
 	destPath: string,
@@ -123,7 +125,7 @@ const extractVideoThumb = async (
 ) =>
 	new Promise<void>((resolve, reject) => {
 		const cmd = `ffmpeg -ss ${time} -i ${path} -y -vf scale=${size.width}:-1 -vframes 1 -f image2 ${destPath}`
-		exec(cmd, err => {
+		exec(cmd, { timeout: VIDEO_THUMB_TIMEOUT_MS, killSignal: 'SIGKILL' }, err => {
 			if (err) {
 				reject(err)
 			} else {
